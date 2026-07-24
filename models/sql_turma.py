@@ -32,6 +32,9 @@ class SQLTurmaModel:
                 [unidade_responsavel]
             FROM [{cls.TABLE_NAME}]
             WHERE sit_turma = 'Aberta'
+            AND unidade_responsavel = '001'
+            AND ano = 2026
+            AND semestre = 2
         """
         params = []
         if unidades:
