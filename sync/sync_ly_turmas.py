@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-
 sync/sync_ly_turmas.py
 Sincronização da tabela LY_TURMA
 - APENAS método GET na API Lyceum
 - Sincronização completa (full refresh)
+- Filtro fixo: ano = 2026
 - Sem chave primária fixa (similar a LY_CURRICULO e LY_DISCIPLINA)
 """
 
@@ -42,6 +42,7 @@ def run() -> bool:
     logger.info("=" * 80)
     logger.info("INICIANDO SINCRONIZAÇÃO - LY_TURMA")
     logger.info("Modo: FULL REFRESH | API: GET ONLY")
+    logger.info("Filtro: ano = 2026")
     logger.info("Início: %s", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
     logger.info("=" * 80)
 
@@ -63,16 +64,16 @@ def run() -> bool:
         )
 
         # ---------------------------------------------------------------------
-        # 2. Buscar dados da API (APENAS GET)
+        # 2. Buscar dados da API (APENAS GET) – apenas ano=2026
         # ---------------------------------------------------------------------
-        logger.info("[2/4] Buscando dados da API Lyceum (GET)")
-        logger.info("Endpoint: /v2/tabela/turmas")
+        logger.info("[2/4] Buscando dados da API Lyceum (GET) - ano=2026")
+        logger.info("Endpoint: /v2/tabela/turmas?ano=2026")
 
         client = TurmaAPIClient()
-        turmas = client.get_turmas()  # 🔒 GET ONLY
+        turmas = client.get_turmas_filtradas(ano=2026)  # 🔒 GET com filtro
 
         if not turmas:
-            logger.warning("Nenhum registro retornado pela API")
+            logger.warning("Nenhum registro retornado pela API para o ano 2026")
             return True  # execução válida, mas sem dados
 
         logger.info("Total retornado pela API: %d", len(turmas))
@@ -127,7 +128,7 @@ def run() -> bool:
 
         logger.info("=" * 80)
         logger.info("RESUMO DA SINCRONIZAÇÃO - LY_TURMA")
-        logger.info("API (GET): %d registros", len(turmas))
+        logger.info("API (GET): %d registros (ano=2026)", len(turmas))
         logger.info("Processados: %d", len(turmas_validas))
         logger.info("Inseridos no banco local: %d", total_inseridos)
 
@@ -146,7 +147,7 @@ def run() -> bool:
         )
 
         logger.info("Tempo total: %.2f s", tempo_total)
-        logger.info("Taxa: %.2f turmas/s", len(turmas_validas) / tempo_total)
+        logger.info("Taxa: %.2f turmas/s", len(turmas_validas) / tempo_total if tempo_total > 0 else 0)
 
         logger.info("SINCRONIZAÇÃO FINALIZADA COM SUCESSO")
         logger.info("=" * 80)

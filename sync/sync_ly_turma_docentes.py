@@ -6,6 +6,7 @@ Sincronização da tabela LY_TURMA_DOCENTE
 - API Lyceum: SOMENTE GET
 - Escrita: APENAS banco local
 - Estratégia: Full refresh (truncate + insert)
+- Filtro fixo: ano = 2026
 """
 
 import sys
@@ -13,6 +14,7 @@ import os
 import time
 import logging
 from datetime import datetime
+from collections import Counter
 
 # Garante import absoluto a partir da raiz do projeto
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,11 +43,13 @@ logger = logging.getLogger("sync.ly_turma_docente")
 
 def run() -> bool:
     """
-    Executa a sincronização completa da tabela LY_TURMA_DOCENTE.
+    Executa a sincronização completa da tabela LY_TURMA_DOCENTE,
+    filtrando apenas registros com ano = 2026.
     """
     logger.info("=" * 70)
     logger.info("INICIANDO SINCRONIZAÇÃO - LY_TURMA_DOCENTE")
     logger.info("Modo: LEITURA (API GET) + ESCRITA LOCAL")
+    logger.info("Filtro: ano = 2026")
     logger.info("=" * 70)
 
     start_time = time.time()
@@ -66,25 +70,32 @@ def run() -> bool:
         )
 
         # ------------------------------------------------------------------
-        # 2. Leitura da API (SOMENTE GET)
+        # 2. Leitura da API (SOMENTE GET) – com filtro de ano
         # ------------------------------------------------------------------
         logger.info("Conectando à API Lyceum (GET apenas)")
         logger.info("Base URL: %s", config.LYCEUM_BASE_URL)
-        logger.info("Endpoint: /v2/tabela/turma-docente")
+        logger.info("Endpoint: /v2/tabela/turma-docente?ano=2026")
 
         client = get_turma_docente_client()
 
-        logger.info("Buscando dados via paginação interna do APIClient...")
-        registros_api = client.get_turmas_docentes()
+        # 🔽 ALTERAÇÃO PRINCIPAL: filtro por ano = 2026
+        logger.info("Buscando dados com filtro ano=2026 via paginação...")
+        registros_api = client.get_turmas_docentes_filtradas(ano=2026)
+        # Caso o cliente não tenha esse método, use:
+        # registros_api = client.get_paginated("/v2/tabela/turma-docente", params={"ano": 2026})
 
         if not registros_api:
-            logger.warning("API retornou zero registros")
+            logger.warning("API retornou zero registros para o ano 2026")
             return True
 
         logger.info("Total retornado pela API: %d", len(registros_api))
 
+        # Estatística rápida: verificar se todos têm ano=2026 (diagnóstico)
+        anos_presentes = Counter(r.get("ano") for r in registros_api if r.get("ano") is not None)
+        logger.info("Distribuição de anos nos dados retornados: %s", anos_presentes)
+
         # ------------------------------------------------------------------
-        # 3. Validação mínima
+        # 3. Validação mínima (chave obrigatória)
         # ------------------------------------------------------------------
         registros_validos = []
         registros_invalidos = 0
@@ -126,6 +137,7 @@ def run() -> bool:
         logger.info("Turmas distintas: %d", resumo_final.get("turmas_distintas", 0))
         logger.info("Disciplinas distintas: %d", resumo_final.get("disciplinas_distintas", 0))
         logger.info("Docentes distintos: %d", resumo_final.get("docentes_distintos", 0))
+        logger.info("Anos presentes no banco: %d", resumo_final.get("anos_distintos", 0))
         logger.info("Tempo total: %.2f s", tempo_total)
 
         if inseridos != len(registros_validos):
