@@ -271,3 +271,25 @@ Dashboard de monitoramento das execuções
 👤 Autor
 Leonardo da Silva Paiva
 Analista de Sistemas / Desenvolvedor
+
+
+
+Usando O ENDPOINT TURMA_DOCENTE:
+
+Como usar
+Sem argumentos: lê todas as páginas a partir do último checkpoint até o final da API.
+
+bash
+python sync/sync_ly_turma_docentes.py
+Com --pages N: lê apenas N páginas (a partir do checkpoint) e para.
+
+bash
+python sync/sync_ly_turma_docentes.py --pages 5
+Com --reset: reseta o checkpoint para página 0 e reinicia a sincronização do início.
+
+bash
+python sync/sync_ly_turma_docentes.py --reset
+Combinado: --reset --pages 10 (reseta e lê 10 páginas).
+
+bash
+python sync/sync_ly_turma_docentes.py --reset --pages 10

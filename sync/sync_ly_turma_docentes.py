@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
 sync/sync_ly_turma_docentes.py
-Sincronização da tabela LY_TURMA_DOCENTE
+Sincronização incremental com checkpoint baseado em páginas.
 
-- API Lyceum: SOMENTE GET
-- Escrita: APENAS banco local
-- Estratégia: Full refresh (truncate + insert)
-- Filtro fixo: ano = 2026
+Uso:
+  python sync_ly_turma_docentes.py                             # processa até o fim da API
+  python sync_ly_turma_docentes.py --pages 10                  # processa apenas 10 páginas
+  python sync_ly_turma_docentes.py --checkpoint-pages 50       # salva checkpoint a cada 50 páginas
+  python sync_ly_turma_docentes.py --reset                     # reseta o checkpoint e limpa a tabela
 """
 
 import sys
 import os
 import time
 import logging
+import argparse
 from datetime import datetime
-from collections import Counter
 
-# Garante import absoluto a partir da raiz do projeto
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
@@ -25,10 +25,6 @@ from core.config import config
 from core.api_client import get_turma_docente_client
 from models.ly_turma_docente import LyTurmaDocenteModel
 
-# ------------------------------------------------------------------------------
-# Logging
-# ------------------------------------------------------------------------------
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -36,146 +32,151 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sync.ly_turma_docente")
 
+# Constantes
+PAGE_SIZE = config.API_PAGE_SIZE              # geralmente 100
+BATCH_SIZE = 1000                             # insere a cada 1000 registros
+DEFAULT_DELAY = config.API_DELAY_BETWEEN_REQUESTS
 
-# ------------------------------------------------------------------------------
-# Sincronização
-# ------------------------------------------------------------------------------
 
-def run() -> bool:
+def run(max_pages: int = None, reset_checkpoint: bool = False, checkpoint_pages: int = 100) -> bool:
     """
-    Executa a sincronização completa da tabela LY_TURMA_DOCENTE,
-    filtrando apenas registros com ano = 2026.
+    Executa a sincronização.
+
+    Args:
+        max_pages: Número máximo de páginas a processar. None = até o fim.
+        reset_checkpoint: Se True, reinicia da página 0 e limpa a tabela.
+        checkpoint_pages: Frequência (em páginas) para salvar o checkpoint.
     """
     logger.info("=" * 70)
-    logger.info("INICIANDO SINCRONIZAÇÃO - LY_TURMA_DOCENTE")
-    logger.info("Modo: LEITURA (API GET) + ESCRITA LOCAL")
+    logger.info("INICIANDO SINCRONIZAÇÃO - LY_TURMA_DOCENTE (INCREMENTAL)")
+    if max_pages:
+        logger.info(f"Modo: processar até {max_pages} páginas")
+    else:
+        logger.info("Modo: processar até o fim da API")
+    logger.info(f"Checkpoint salvo a cada {checkpoint_pages} páginas")
     logger.info("Filtro: ano = 2026")
     logger.info("=" * 70)
 
     start_time = time.time()
-
     try:
-        # ------------------------------------------------------------------
-        # 1. Preparação da tabela local
-        # ------------------------------------------------------------------
-        logger.info("Preparando tabela local...")
+        # 1. Criar tabelas
         LyTurmaDocenteModel.create_table()
+        LyTurmaDocenteModel._create_checkpoint_table()
 
-        resumo_inicial = LyTurmaDocenteModel.get_summary()
-        logger.info(
-            "Estado inicial | total=%s | turmas=%s | docentes=%s",
-            resumo_inicial.get("total_registros", 0),
-            resumo_inicial.get("turmas_distintas", 0),
-            resumo_inicial.get("docentes_distintos", 0),
-        )
+        # 2. Reset opcional
+        if reset_checkpoint:
+            logger.warning("Reset solicitado: limpando tabela e checkpoint.")
+            LyTurmaDocenteModel.clear_table()
+            LyTurmaDocenteModel.update_checkpoint(0, 0)
+            logger.info("Reset concluído.")
 
-        # ------------------------------------------------------------------
-        # 2. Leitura da API (SOMENTE GET) – com filtro de ano
-        # ------------------------------------------------------------------
-        logger.info("Conectando à API Lyceum (GET apenas)")
-        logger.info("Base URL: %s", config.LYCEUM_BASE_URL)
-        logger.info("Endpoint: /v2/tabela/turma-docente?ano=2026")
+        # 3. Obter checkpoint atual
+        checkpoint = LyTurmaDocenteModel.get_checkpoint()
+        current_page = checkpoint['last_page']
+        last_chave = checkpoint['last_chave']
+        logger.info("Checkpoint atual: página %s, última chave %s", current_page, last_chave)
 
+        # 4. Preparar cliente e variáveis de controle
         client = get_turma_docente_client()
+        page = current_page
+        total_inseridos = 0
+        buffer = []
+        pages_processed = 0
+        pages_since_last_checkpoint = 0
 
-        # 🔽 ALTERAÇÃO PRINCIPAL: filtro por ano = 2026
-        logger.info("Buscando dados com filtro ano=2026 via paginação...")
-        registros_api = client.get_turmas_docentes_filtradas(ano=2026)
-        # Caso o cliente não tenha esse método, use:
-        # registros_api = client.get_paginated("/v2/tabela/turma-docente", params={"ano": 2026})
+        while True:
+            # Verificar se atingimos o limite de páginas
+            if max_pages is not None and pages_processed >= max_pages:
+                logger.info("Limite de páginas (%d) atingido. Encerrando.", max_pages)
+                break
 
-        if not registros_api:
-            logger.warning("API retornou zero registros para o ano 2026")
-            return True
+            logger.info("Lendo página %d...", page)
+            items = client.get_turmas_docentes_from_page(page, PAGE_SIZE)
 
-        logger.info("Total retornado pela API: %d", len(registros_api))
+            # Se não houver dados, fim da API
+            if not items:
+                logger.info("Página %d vazia – fim da API.", page)
+                # Inserir buffer restante e salvar checkpoint final
+                if buffer:
+                    inseridos = LyTurmaDocenteModel.batch_insert(buffer)
+                    total_inseridos += inseridos
+                # Atualiza checkpoint com a página atual (mesmo que vazia, indica que avançamos)
+                LyTurmaDocenteModel.update_checkpoint(page, 0)
+                logger.info("Checkpoint final salvo (página %d)", page)
+                break
 
-        # Estatística rápida: verificar se todos têm ano=2026 (diagnóstico)
-        anos_presentes = Counter(r.get("ano") for r in registros_api if r.get("ano") is not None)
-        logger.info("Distribuição de anos nos dados retornados: %s", anos_presentes)
+            # Filtrar apenas registros com ano=2026
+            items_2026 = [item for item in items if item.get('ano') == 2026]
+            logger.info("Página %d: %d registros, %d são de 2026", page, len(items), len(items_2026))
 
-        # ------------------------------------------------------------------
-        # 3. Validação mínima (chave obrigatória)
-        # ------------------------------------------------------------------
-        registros_validos = []
-        registros_invalidos = 0
+            # Adicionar ao buffer
+            buffer.extend(items_2026)
 
-        for item in registros_api:
-            if item.get("chave"):
-                registros_validos.append(item)
-            else:
-                registros_invalidos += 1
+            # Inserir se o buffer atingiu o tamanho do lote
+            if len(buffer) >= BATCH_SIZE:
+                inseridos = LyTurmaDocenteModel.batch_insert(buffer)
+                total_inseridos += inseridos
+                buffer = []
+                logger.info("Buffer inserido (total %d registros)", total_inseridos)
 
-        if registros_invalidos:
-            logger.warning("Registros descartados (sem chave): %d", registros_invalidos)
+            # Incrementar contador de páginas desde o último checkpoint
+            pages_since_last_checkpoint += 1
 
-        if not registros_validos:
-            logger.warning("Nenhum registro válido para inserção")
-            return True
+            # Salvar checkpoint a cada 'checkpoint_pages' páginas
+            if pages_since_last_checkpoint >= checkpoint_pages:
+                # Forçar inserção do buffer restante antes de salvar checkpoint
+                if buffer:
+                    inseridos = LyTurmaDocenteModel.batch_insert(buffer)
+                    total_inseridos += inseridos
+                    buffer = []
+                # Obter a maior chave da página atual (ou última chave conhecida)
+                # Usamos a chave do último item da página (assumindo que a API ordena por chave crescente)
+                last_key = items[-1].get('chave', 0) if items else 0
+                LyTurmaDocenteModel.update_checkpoint(page, last_key)
+                pages_since_last_checkpoint = 0
+                logger.info("Checkpoint salvo na página %d (chave %d)", page, last_key)
 
-        logger.info("Registros válidos: %d", len(registros_validos))
+            # Avançar para a próxima página
+            pages_processed += 1
+            page += 1
+            time.sleep(DEFAULT_DELAY)
 
-        # ------------------------------------------------------------------
-        # 4. Limpeza e carga local
-        # ------------------------------------------------------------------
-        logger.info("Limpando tabela local...")
-        LyTurmaDocenteModel.clear_table()
-
-        logger.info("Inserindo registros no banco local...")
-        inseridos = LyTurmaDocenteModel.batch_insert(registros_validos)
-
-        # ------------------------------------------------------------------
         # 5. Resumo final
-        # ------------------------------------------------------------------
         tempo_total = time.time() - start_time
-        resumo_final = LyTurmaDocenteModel.get_summary()
-
+        resumo = LyTurmaDocenteModel.get_summary()
         logger.info("=" * 70)
         logger.info("SINCRONIZAÇÃO FINALIZADA")
-        logger.info("Inseridos: %d", inseridos)
-        logger.info("Total final no banco local: %d", resumo_final.get("total_registros", 0))
-        logger.info("Turmas distintas: %d", resumo_final.get("turmas_distintas", 0))
-        logger.info("Disciplinas distintas: %d", resumo_final.get("disciplinas_distintas", 0))
-        logger.info("Docentes distintos: %d", resumo_final.get("docentes_distintos", 0))
-        logger.info("Anos presentes no banco: %d", resumo_final.get("anos_distintos", 0))
+        logger.info("Total inseridos nesta execução: %d", total_inseridos)
+        logger.info("Total no banco: %d", resumo.get('total_registros', 0))
+        logger.info("Última página processada: %d", page - 1)
         logger.info("Tempo total: %.2f s", tempo_total)
-
-        if inseridos != len(registros_validos):
-            logger.warning(
-                "Carga parcial (%d/%d)",
-                inseridos,
-                len(registros_validos),
-            )
-        else:
-            logger.info("Carga concluída com sucesso")
-
         return True
 
-    except Exception:
-        logger.exception("Erro durante a sincronização")
+    except Exception as e:
+        logger.exception("Erro durante a sincronização: %s", e)
         return False
 
 
-# ------------------------------------------------------------------------------
-# Main
-# ------------------------------------------------------------------------------
-
 def main() -> int:
-    """
-    Ponto de entrada do script.
-    """
-    if not all(
-        [
-            config.LYCEUM_BASE_URL,
-            config.LYCEUM_USERNAME,
-            config.LYCEUM_PASSWORD,
-        ]
-    ):
-        logger.error("Configuração da API incompleta (.env)")
+    parser = argparse.ArgumentParser(description="Sincroniza LY_TURMA_DOCENTE de forma incremental.")
+    parser.add_argument("--pages", type=int, default=None,
+                        help="Número máximo de páginas a processar (default: todas)")
+    parser.add_argument("--checkpoint-pages", type=int, default=100,
+                        help="Frequência de checkpoint em páginas (default: 100)")
+    parser.add_argument("--reset", action="store_true",
+                        help="Reseta o checkpoint e limpa a tabela local")
+    args = parser.parse_args()
+
+    if not all([config.LYCEUM_BASE_URL, config.LYCEUM_USERNAME, config.LYCEUM_PASSWORD]):
+        logger.error("Configuração da API incompleta")
         return 1
 
-    sucesso = run()
-    return 0 if sucesso else 1
+    success = run(
+        max_pages=args.pages,
+        reset_checkpoint=args.reset,
+        checkpoint_pages=args.checkpoint_pages
+    )
+    return 0 if success else 1
 
 
 if __name__ == "__main__":

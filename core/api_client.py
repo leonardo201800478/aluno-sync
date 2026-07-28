@@ -289,9 +289,9 @@ class TurmaAPIClient(BaseAPIClient):
 class TurmaDocenteAPIClient(BaseAPIClient):
     def get_turmas_docentes(self) -> List[dict]:
         return self.get_paginated("/v2/tabela/turma-docente")
-    
+
     def get_turmas_docentes_filtradas(self, ano: Optional[int] = None, semestre: Optional[int] = None) -> List[dict]:
-        """Obtém turma-docente com filtros opcionais de ano e semestre"""
+        # Mantido para compatibilidade, mas usa get_paginated sem filtro real
         params = {}
         if ano is not None:
             params["ano"] = ano
@@ -299,6 +299,19 @@ class TurmaDocenteAPIClient(BaseAPIClient):
             params["semestre"] = semestre
         return self.get_paginated("/v2/tabela/turma-docente", params=params)
 
+    def get_turmas_docentes_from_page(self, start_page: int, page_size: int = 100) -> List[dict]:
+        """
+        Obtém uma única página de registros a partir da página especificada.
+        Retorna a lista de itens daquela página e, como atributo adicional, a página atual.
+        """
+        params = {
+            "page": start_page,
+            "size": page_size
+        }
+        data = self.get("/v2/tabela/turma-docente", params=params)
+        if data and isinstance(data, dict) and 'data' in data:
+            return data['data']
+        return []
 
 class MatriculaAPIClient(BaseAPIClient):
     def get_matriculas(self) -> List[dict]:
