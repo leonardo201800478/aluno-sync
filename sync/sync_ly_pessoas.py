@@ -2,13 +2,14 @@
 """
 sync/sync_ly_pessoas.py
 
-SINCRONIZAÇÃO LY_PESSOA
+SINCRONIZAÇÃO LY_PESSOA via endpoint específico por ID,
+com upsert incremental a cada 100 pessoas coletadas.
 
 Características:
-- Busca dados da API Lyceum
-- Valida registros recebidos
-- UPSERT por chave primária (pessoa)
-- Processamento em lotes de 1000 registros
+- Busca IDs de alunos em LY_ALUNO que não estão em LY_PESSOA
+- Para cada ID, chama /v2/pessoas/idPessoa/{id}/obterPessoa
+- Coleta em lotes de 100 e faz UPSERT imediato
+- Processamento em lote de upsert de 1000 (ajustável)
 - Logs detalhados de progresso
 - Resumo final da execução
 """
@@ -17,262 +18,185 @@ import os
 import sys
 import time
 import logging
+from typing import List, Dict, Any
 
-PROJECT_ROOT = os.path.dirname(
-    os.path.dirname(
-        os.path.abspath(__file__)
-    )
-)
-
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.api_client import PessoaAPIClient
+from core.database import fetch_all
+from core.config import config
 from models.ly_pessoa import LyPessoaModel
-
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 1000
+# Tamanho do lote de coleta (quantas pessoas buscar antes de fazer UPSERT)
+COLETAR_LOTE = 100
+# Tamanho do lote de upsert (quantas enviar por vez no MERGE)
+UPSERT_BATCH = 1000
 
 
-def sincronizar_pessoas():
+def obter_ids_pendentes() -> List[int]:
+    """
+    Retorna lista de IDs (pessoa) de LY_ALUNO que NÃO estão em LY_PESSOA.
+    """
+    query = """
+        SELECT DISTINCT a.pessoa
+        FROM lyceum.dbo.LY_ALUNO a
+        LEFT JOIN lyceum.dbo.LY_PESSOA p ON a.pessoa = p.pessoa
+        WHERE p.pessoa IS NULL
+    """
+    rows = fetch_all(query, database_name="lyceum")
+    return [row[0] for row in rows] if rows else []
 
+
+def sincronizar_pessoas() -> Dict[str, Any]:
     logger.info("=" * 80)
-    logger.info("INICIANDO SINCRONIZAÇÃO LY_PESSOA")
-    logger.info(f"Tamanho do lote: {BATCH_SIZE}")
+    logger.info("INICIANDO SINCRONIZAÇÃO LY_PESSOA (via endpoint específico)")
+    logger.info(f"Coleta em lotes de: {COLETAR_LOTE}")
+    logger.info(f"UPSERT em lotes de: {UPSERT_BATCH}")
     logger.info("=" * 80)
 
     inicio_execucao = time.time()
 
     try:
-
         # ------------------------------------------------------------------
         # Garantir existência da tabela
         # ------------------------------------------------------------------
-
         logger.info("Verificando estrutura da tabela...")
-
         LyPessoaModel.create_table()
 
         resumo_inicial = LyPessoaModel.get_summary()
-
-        total_inicial = resumo_inicial.get(
-            "total_pessoas",
-            0
-        )
-
-        logger.info(
-            f"Total atual na tabela: {total_inicial:,}"
-        )
+        total_inicial = resumo_inicial.get("total_pessoas", 0)
+        logger.info(f"Total atual na tabela: {total_inicial:,}")
 
         # ------------------------------------------------------------------
-        # Buscar API
+        # Buscar IDs pendentes no banco
         # ------------------------------------------------------------------
+        logger.info("Consultando IDs de alunos pendentes na tabela LY_PESSOA...")
+        ids_pendentes = obter_ids_pendentes()
 
-        logger.info(
-            "Consultando API de pessoas do Lyceum..."
-        )
-
-        api_inicio = time.time()
-
-        client = PessoaAPIClient()
-
-        pessoas = client.get_pessoas()
-
-        api_tempo = time.time() - api_inicio
-
-        if not pessoas:
-
-            logger.warning(
-                "A API retornou zero registros."
-            )
-
+        if not ids_pendentes:
+            logger.info("Nenhuma pessoa pendente para sincronizar.")
             return {
                 "success": True,
                 "total_api": 0,
                 "validos": 0,
                 "processados": 0,
-                "tempo_total": 0
+                "tempo_total": time.time() - inicio_execucao,
             }
 
-        logger.info(
-            f"API retornou {len(pessoas):,} registros "
-            f"em {api_tempo:.2f}s"
-        )
+        total_ids = len(ids_pendentes)
+        logger.info(f"Encontrados {total_ids:,} IDs pendentes.")
 
         # ------------------------------------------------------------------
-        # Validar registros
+        # Loop principal: coleta em lotes e upsert incremental
         # ------------------------------------------------------------------
+        client = PessoaAPIClient()
+        total_obtidos = 0
+        total_validos = 0
+        total_processados = 0
+        erros_api = 0
+        lote_coleta = []  # buffer de pessoas coletadas
 
-        logger.info(
-            "Validando registros recebidos..."
-        )
+        inicio_api_geral = time.time()
 
-        validos = []
-        invalidos = 0
+        for idx, pid in enumerate(ids_pendentes, 1):
+            # Busca a pessoa
+            logger.info(f"Buscando pessoa {pid} ({idx}/{total_ids})...")
+            pessoa = client.get_pessoa_detalhada(pid)
+            if pessoa:
+                lote_coleta.append(pessoa)
+                total_obtidos += 1
+            else:
+                erros_api += 1
+                logger.warning(f"Falha ao obter dados para ID {pid}")
 
-        for pessoa in pessoas:
+            # Respeita o delay da API
+            time.sleep(config.API_DELAY_BETWEEN_REQUESTS)
 
-            if not isinstance(pessoa, dict):
-                invalidos += 1
-                continue
+            # Se atingiu o tamanho do lote de coleta OU é o último ID, processa o lote
+            if len(lote_coleta) >= COLETAR_LOTE or idx == total_ids:
+                if lote_coleta:
+                    # Validar registros do lote
+                    validos = []
+                    invalidos = 0
+                    for p in lote_coleta:
+                        if isinstance(p, dict) and p.get("pessoa") is not None:
+                            validos.append(p)
+                        else:
+                            invalidos += 1
+                    total_validos += len(validos)
+                    if invalidos:
+                        logger.warning(f"Registros inválidos neste lote: {invalidos}")
 
-            if pessoa.get("pessoa") is None:
-                invalidos += 1
-                continue
+                    # Upsert do lote válido
+                    if validos:
+                        logger.info(f"Upsert de {len(validos)} pessoas (lote de coleta)...")
+                        processados = LyPessoaModel.batch_upsert(validos, batch_size=UPSERT_BATCH)
+                        total_processados += processados
+                        logger.info(f"Lote processado: {processados} registros inseridos/atualizados.")
+                    else:
+                        logger.warning("Nenhum registro válido neste lote para upsert.")
 
-            validos.append(pessoa)
+                    # Limpa o buffer para o próximo lote
+                    lote_coleta = []
 
-        logger.info(
-            f"Registros válidos: {len(validos):,}"
-        )
-
-        if invalidos:
-            logger.warning(
-                f"Registros inválidos ignorados: "
-                f"{invalidos:,}"
-            )
-
-        if not validos:
-
-            logger.warning(
-                "Nenhum registro válido encontrado."
-            )
-
-            return {
-                "success": True,
-                "total_api": len(pessoas),
-                "validos": 0,
-                "processados": 0,
-                "tempo_total": 0
-            }
-
-        # ------------------------------------------------------------------
-        # UPSERT
-        # ------------------------------------------------------------------
-
-        logger.info(
-            f"Iniciando UPSERT de "
-            f"{len(validos):,} registros..."
-        )
-
-        inicio_upsert = time.time()
-
-        processados = LyPessoaModel.batch_upsert(
-            validos,
-            batch_size=BATCH_SIZE
-        )
-
-        tempo_upsert = time.time() - inicio_upsert
+        tempo_api_geral = time.time() - inicio_api_geral
 
         # ------------------------------------------------------------------
         # Resumo final
         # ------------------------------------------------------------------
-
         resumo_final = LyPessoaModel.get_summary()
-
-        total_final = resumo_final.get(
-            "total_pessoas",
-            0
-        )
-
+        total_final = resumo_final.get("total_pessoas", 0)
         tempo_total = time.time() - inicio_execucao
 
         logger.info("=" * 80)
         logger.info("RESUMO DA SINCRONIZAÇÃO")
         logger.info("=" * 80)
-
-        logger.info(
-            f"Total recebido da API: "
-            f"{len(pessoas):,}"
-        )
-
-        logger.info(
-            f"Registros válidos: "
-            f"{len(validos):,}"
-        )
-
-        logger.info(
-            f"Registros processados: "
-            f"{processados:,}"
-        )
-
-        logger.info(
-            f"Total antes: "
-            f"{total_inicial:,}"
-        )
-
-        logger.info(
-            f"Total depois: "
-            f"{total_final:,}"
-        )
-
-        logger.info(
-            f"Tempo API: "
-            f"{api_tempo:.2f}s"
-        )
-
-        logger.info(
-            f"Tempo UPSERT: "
-            f"{tempo_upsert:.2f}s"
-        )
-
-        logger.info(
-            f"Tempo total: "
-            f"{tempo_total:.2f}s"
-        )
-
-        ultima_atualizacao = resumo_final.get(
-            "ultima_atualizacao"
-        )
-
+        logger.info(f"Total de IDs pendentes: {total_ids:,}")
+        logger.info(f"Registros obtidos da API: {total_obtidos:,}")
+        logger.info(f"Erros na API: {erros_api:,}")
+        logger.info(f"Registros válidos: {total_validos:,}")
+        logger.info(f"Registros processados (UPSERT): {total_processados:,}")
+        logger.info(f"Total antes: {total_inicial:,}")
+        logger.info(f"Total depois: {total_final:,}")
+        logger.info(f"Tempo total de API (incluindo delays): {tempo_api_geral:.2f}s")
+        logger.info(f"Tempo total de execução: {tempo_total:.2f}s")
+        ultima_atualizacao = resumo_final.get("ultima_atualizacao")
         if ultima_atualizacao:
-
-            logger.info(
-                f"Última atualização: "
-                f"{ultima_atualizacao}"
-            )
-
+            logger.info(f"Última atualização: {ultima_atualizacao}")
         logger.info("=" * 80)
 
         return {
             "success": True,
-            "total_api": len(pessoas),
-            "validos": len(validos),
-            "processados": processados,
-            "tempo_api": api_tempo,
-            "tempo_upsert": tempo_upsert,
-            "tempo_total": tempo_total
+            "total_ids": total_ids,
+            "total_obtidos": total_obtidos,
+            "validos": total_validos,
+            "processados": total_processados,
+            "erros_api": erros_api,
+            "tempo_api": tempo_api_geral,
+            "tempo_total": tempo_total,
         }
 
     except Exception as e:
-
-        logger.exception(
-            f"Erro durante sincronização: {e}"
-        )
-
+        logger.exception(f"Erro durante sincronização: {e}")
         return {
             "success": False,
-            "erro": str(e)
+            "erro": str(e),
         }
 
 
-def run():
+def run() -> Dict[str, Any]:
     return sincronizar_pessoas()
 
 
 if __name__ == "__main__":
-
     resultado = run()
-
-    if resultado.get("success"):
-        sys.exit(0)
-
-    sys.exit(1)
+    sys.exit(0 if resultado.get("success") else 1)

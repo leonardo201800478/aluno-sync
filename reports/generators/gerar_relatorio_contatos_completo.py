@@ -1,9 +1,24 @@
+#!/usr/bin/env python3
+"""
+Gerador de relatório de contatos de alunos.
+Uso:
+    python reports/generators/gerar_relatorio_contatos_completo.py
+"""
+
+import sys
 from pathlib import Path
+
+# Adiciona a raiz do projeto ao PYTHONPATH
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import pandas as pd
 from core.logger import logger
 from reports.exporters.excel_exporter import ExcelExporter
 from reports.exporters.pdf_exporter import PDFExporter
 from reports.queries.relatorio_contatos_filtros import get_dados_contatos_filtros
+
 
 def gerar_relatorio_contatos_completo(anos, semestres, unidade, curso,
                                       ano_ingresso=None, sem_ingresso=None,
@@ -22,6 +37,12 @@ def gerar_relatorio_contatos_completo(anos, semestres, unidade, curso,
     if dados.empty:
         logger.warning("Nenhum dado encontrado para os filtros.")
         return None, None, None
+
+    # Define diretório de saída
+    if output_dir is None:
+        output_dir = Path.cwd() / "relatorios"
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
     base_filename = f"contatos_{timestamp}"
@@ -69,6 +90,7 @@ def gerar_relatorio_contatos_completo(anos, semestres, unidade, curso,
 
     logger.info(f"Relatórios gerados: {html_path}, {excel_path}, {pdf_path}")
     return html_path, excel_path, pdf_path
+
 
 def gerar_html(dados, output_path, anos, semestres, unidade, curso,
                ano_ingresso=None, sem_ingresso=None):
@@ -136,3 +158,25 @@ def gerar_html(dados, output_path, anos, semestres, unidade, curso,
 
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(html_content))
+
+
+# =========================================================
+# Bloco principal para execução direta (exemplo)
+# =========================================================
+if __name__ == "__main__":
+    # Defina aqui os filtros desejados
+    # Exemplo com dados fictícios – ajuste conforme sua necessidade
+    FILTROS = {
+        "anos": [2026, 2025],
+        "semestres": [21, 22, 23, 24],
+        "unidade": "002",               # código da unidade
+        "curso": None,                  # None = todos os cursos
+        "ano_ingresso": None,           # None = todos
+        "sem_ingresso": None,           # None = todos
+        "output_dir": Path.cwd() / "relatorios"
+    }
+
+    html, excel, pdf = gerar_relatorio_contatos_completo(**FILTROS)
+    print(f"HTML: {html}")
+    print(f"Excel: {excel}")
+    print(f"PDF: {pdf}")

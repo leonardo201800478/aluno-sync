@@ -27,7 +27,7 @@ SYNC_MODULES = [
     ("sync.sync_ly_alunos",               "run"),
     ("sync.sync_ly_turmas",               "run"),
     ("sync.sync_ly_docentes",             "run"),
-    ("sync.sync_ly_turma_docentes",       "run"),
+    #("sync.sync_ly_turma_docentes",       "run"),
     ("sync.sync_ly_coordenacoes",         "run"),
     ("sync.sync_ly_grades",               "run"),
     ("sync.sync_ly_matriculas",           "run"),

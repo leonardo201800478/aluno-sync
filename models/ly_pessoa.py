@@ -16,152 +16,51 @@ class LyPessoaModel:
     TABLE_NAME = "LY_PESSOA"
     DB_NAME = "lyceum"
 
-    # Lista de campos conforme API (excluindo metadados internos)
+    # Lista de campos conforme API (excluindo metadados internos e campos derivados)
+    # ATUALIZADO para incluir campos do novo endpoint /v2/pessoas/idPessoa/...
     API_FIELDS = [
-        "alist_csm",
-        "alist_dtexp",
-        "alist_num",
-        "alist_rm",
-        "alist_serie",
-        "area_prof",
-        "autoriza_envio_mail",
-        "bairro",
-        "cargo",
-        "celular",
-        "cep",
-        "cert_nasc_cartorio_exped",
-        "cert_nasc_cartorio_uf",
-        "cert_nasc_emissao",
-        "cert_nasc_folha",
-        "cert_nasc_livro",
-        "cert_nasc_matricula",
-        "cert_nasc_num",
-        "conselho_regional",
-        "contribui_renda",
-        "cor_raca",
-        "cpf",
-        "cprof_dtexp",
-        "cprof_num",
-        "cprof_serie",
-        "cprof_uf",
-        "cr_cat",
-        "cr_csm",
-        "cr_dtexp",
-        "cr_num",
-        "cr_rm",
-        "cr_serie",
-        "credo",
-        "ddd_fax_res",
-        "ddd_fone",
-        "ddd_fone_celular",
-        "ddd_fone_comercial",
-        "ddd_fone_recado",
-        "ddd_resp_fone",
-        "depto_com",
-        "divida_biblio",
-        "dt_falecimento",
-        "dt_nasc",
-        "e_mail",
-        "e_mail_com",
-        "e_mail_interno",
-        "end_compl",
-        "end_correto",
-        "end_municipio",
-        "end_num",
-        "end_pais",
-        "endcom",
-        "endcom_bairro",
-        "endcom_cep",
-        "endcom_compl",
-        "endcom_municipio",
-        "endcom_num",
-        "endcom_pais",
-        "endereco",
-        "especializacao",
-        "est_civil",
-        "etnia",
-        "fax",
-        "fax_res",
-        "fone",
-        "fone_com",
-        "fone_recados",
-        "formacao_mae",
-        "formacao_pai",
-        "hab_tac",
-        "hab_tac_data",
-        "id_censo",
-        "latitude",
-        "longitude",
-        "mailbox",
-        "municipio_nasc",
-        "nacionalidade",
-        "necessidade_especial",
-        "nome_abrev",
-        "nome_compl",
-        "nome_conjuge",
-        "nome_empresa",
-        "nome_mae",
-        "nome_pai",
-        "nome_social",
-        "nr_regua",
-        "num_func",
-        "obs",
-        "obs_cel",
-        "obs_fax",
-        "obs_fax_res",
-        "obs_tel_com",
-        "obs_tel_rec",
-        "obs_tel_res",
-        "orgao_militar",
-        "pais_nasc",
-        "passaporte",
-        "permite_usar_imagem",
-        "permiteacescadsemsenha",
-        "pessoa",
-        "pre_nome_social",
-        "profissao",
-        "qt_filhos",
-        "renda_familiar",
-        "renda_mensal",
-        "resp_bairro",
-        "resp_cep",
-        "resp_cpf",
-        "resp_email",
-        "resp_end_compl",
-        "resp_end_municipio",
-        "resp_end_num",
-        "resp_end_pais",
-        "resp_endereco",
-        "resp_est_civil",
-        "resp_fone",
-        "resp_fone_obs",
-        "resp_municipio_nasc",
-        "resp_nacionalidade",
-        "resp_nome_compl",
-        "resp_rg_dtexp",
-        "resp_rg_emissor",
-        "resp_rg_num",
-        "resp_rg_tipo",
-        "resp_rg_uf",
-        "resp_senha",
-        "resp_sexo",
-        "rg_dtexp",
-        "rg_emissor",
-        "rg_num",
-        "rg_tipo",
-        "rg_uf",
-        "senha_alterada",
-        "senha_tac",
-        "sexo",
-        "stamp_atualizacao",
-        "teleitor_dtexp",
-        "teleitor_mun",
-        "teleitor_num",
-        "teleitor_secao",
-        "teleitor_zona",
-        "tipo_docmilitar",
-        "tipo_sanguineo",
-        "winusuario",
+        # Campos originais (mantidos)
+        "alist_csm", "alist_dtexp", "alist_num", "alist_rm", "alist_serie",
+        "area_prof", "autoriza_envio_mail", "bairro", "cargo", "celular", "cep",
+        "cert_nasc_cartorio_exped", "cert_nasc_cartorio_uf", "cert_nasc_emissao",
+        "cert_nasc_folha", "cert_nasc_livro", "cert_nasc_matricula", "cert_nasc_num",
+        "conselho_regional", "contribui_renda", "cor_raca", "cpf",
+        "cprof_dtexp", "cprof_num", "cprof_serie", "cprof_uf",
+        "cr_cat", "cr_csm", "cr_dtexp", "cr_num", "cr_rm", "cr_serie",
+        "credo", "ddd_fax_res", "ddd_fone", "ddd_fone_celular", "ddd_fone_comercial",
+        "ddd_fone_recado", "ddd_resp_fone", "depto_com", "divida_biblio",
+        "dt_falecimento", "dt_nasc", "e_mail", "e_mail_com", "e_mail_interno",
+        "end_compl", "end_correto", "end_municipio", "end_num", "end_pais",
+        "endcom", "endcom_bairro", "endcom_cep", "endcom_compl", "endcom_municipio",
+        "endcom_num", "endcom_pais", "endereco", "especializacao", "est_civil",
+        "etnia", "fax", "fax_res", "fone", "fone_com", "fone_recados",
+        "formacao_mae", "formacao_pai", "hab_tac", "hab_tac_data", "id_censo",
+        "latitude", "longitude", "mailbox", "municipio_nasc", "nacionalidade",
+        "necessidade_especial", "nome_abrev", "nome_compl", "nome_conjuge",
+        "nome_empresa", "nome_mae", "nome_pai", "nome_social", "nr_regua",
+        "num_func", "obs", "obs_cel", "obs_fax", "obs_fax_res", "obs_tel_com",
+        "obs_tel_rec", "obs_tel_res", "orgao_militar", "pais_nasc", "passaporte",
+        "permite_usar_imagem", "permiteacescadsemsenha", "pessoa", "pre_nome_social",
+        "profissao", "qt_filhos", "renda_familiar", "renda_mensal",
+        "resp_bairro", "resp_cep", "resp_cpf", "resp_email", "resp_end_compl",
+        "resp_end_municipio", "resp_end_num", "resp_end_pais", "resp_endereco",
+        "resp_est_civil", "resp_fone", "resp_fone_obs", "resp_municipio_nasc",
+        "resp_nacionalidade", "resp_nome_compl", "resp_rg_dtexp", "resp_rg_emissor",
+        "resp_rg_num", "resp_rg_tipo", "resp_rg_uf", "resp_senha", "resp_sexo",
+        "rg_dtexp", "rg_emissor", "rg_num", "rg_tipo", "rg_uf",
+        "senha_alterada", "senha_tac", "sexo", "stamp_atualizacao",
+        "teleitor_dtexp", "teleitor_mun", "teleitor_num", "teleitor_secao",
+        "teleitor_zona", "tipo_docmilitar", "tipo_sanguineo", "winusuario",
+
+        # NOVOS CAMPOS do endpoint específico (não presentes na listagem geral)
+        "ddi_fone",
+        "ddi_fone_celular",
+        "ddi_fone_comercial",
+        "dt_criacao",          # timestamp de criação
+        "loc_dif_residenc",
+        "loc_zona_residenc",
+        "povo_indigena",
+        "resp_e_mail",         # alternativa a resp_email (ambos podem vir)
     ]
 
     @classmethod
@@ -182,6 +81,10 @@ class LyPessoaModel:
                 return None
             return value
 
+        # Se for dict (ex: flex fields), ignoramos
+        if isinstance(value, dict):
+            return None
+
         return str(value)
 
     @classmethod
@@ -195,17 +98,12 @@ class LyPessoaModel:
 
     @classmethod
     def create_table(cls):
-        """Cria a tabela LY_PESSOA no SQL Server."""
+        """Cria a tabela LY_PESSOA no SQL Server com todos os campos atualizados."""
         if cls._table_exists():
             logger.info(f"Tabela {cls.TABLE_NAME} já existe.")
             return True
 
-        # Vamos construir um CREATE TABLE com todos os campos
-        # Usaremos NVARCHAR(255) para strings, INT para inteiros, DATETIME2 para datas (mas manteremos string)
-        # Para datas, a API retorna string ISO, então vamos manter como NVARCHAR(30) para evitar problemas de conversão.
-        # Alguns campos são numéricos (pessoa, num_func, qt_filhos, renda_familiar, renda_mensal)
-        # Vamos usar BIGINT para inteiros grandes.
-
+        # Definição dos campos com tipos adequados (mantendo compatibilidade)
         sql = f"""
         CREATE TABLE [{cls.TABLE_NAME}] (
             [alist_csm] NVARCHAR(50),
@@ -352,6 +250,15 @@ class LyPessoaModel:
             [tipo_docmilitar] NVARCHAR(50),
             [tipo_sanguineo] NVARCHAR(10),
             [winusuario] NVARCHAR(50),
+            -- NOVOS CAMPOS
+            [ddi_fone] NVARCHAR(10),
+            [ddi_fone_celular] NVARCHAR(10),
+            [ddi_fone_comercial] NVARCHAR(10),
+            [dt_criacao] NVARCHAR(30),
+            [loc_dif_residenc] NVARCHAR(50),
+            [loc_zona_residenc] NVARCHAR(50),
+            [povo_indigena] NVARCHAR(100),
+            [resp_e_mail] NVARCHAR(255),
             -- Metadados
             [data_importacao] DATETIME2 DEFAULT GETDATE(),
             [data_atualizacao] DATETIME2 DEFAULT GETDATE()
@@ -386,6 +293,11 @@ class LyPessoaModel:
         if pessoa_id is None:
             logger.warning("Registro sem campo 'pessoa' (chave primária).")
             return False
+
+        # Mapeia campos que podem vir com nomes alternativos
+        if "resp_e_mail" in data and "resp_email" not in data:
+            data["resp_email"] = data["resp_e_mail"]
+        # Se vier ambos, prioriza resp_email (já está na lista)
 
         # Lista de colunas (todos os campos da API)
         columns = cls.API_FIELDS
@@ -430,14 +342,7 @@ class LyPessoaModel:
     def batch_upsert(cls, data_list: List[Dict], batch_size: int = 1000) -> int:
         """
         Insere ou atualiza múltiplas pessoas em lotes.
-
-        Processa registros em blocos de 1000 para evitar:
-        - transações gigantes
-        - excesso de memória
-        - timeout de commit
-        - travamentos por lock prolongado
         """
-
         if not data_list:
             logger.warning("Nenhum registro recebido para batch_upsert.")
             return 0
@@ -455,7 +360,6 @@ class LyPessoaModel:
         update_set = ", ".join(
             [f"target.[{col}] = source.[{col}]" for col in columns if col != "pessoa"]
         )
-
         update_set += ", target.[data_atualizacao] = GETDATE()"
 
         insert_cols = f"{col_list}, [data_importacao], [data_atualizacao]"
@@ -465,22 +369,17 @@ class LyPessoaModel:
             MERGE INTO [{cls.TABLE_NAME}] AS target
             USING (VALUES ({param_placeholders})) AS source ({col_list})
             ON target.[pessoa] = source.[pessoa]
-
             WHEN MATCHED THEN
                 UPDATE SET {update_set}
-
             WHEN NOT MATCHED THEN
                 INSERT ({insert_cols})
                 VALUES ({insert_vals});
         """
 
-        logger.info(
-            f"Iniciando batch_upsert de {total:,} registros (lotes de {batch_size})"
-        )
+        logger.info(f"Iniciando batch_upsert de {total:,} registros (lotes de {batch_size})")
 
         with get_db_connection(database_name=cls.DB_NAME) as conn:
             cursor = conn.cursor()
-
             try:
                 cursor.fast_executemany = True
             except Exception:
@@ -488,7 +387,6 @@ class LyPessoaModel:
 
             for lote_num, inicio in enumerate(range(0, total, batch_size), start=1):
                 fim = min(inicio + batch_size, total)
-
                 lote = data_list[inicio:fim]
 
                 sucesso_lote = 0
@@ -498,47 +396,34 @@ class LyPessoaModel:
 
                 for data in lote:
                     pessoa_id = cls._normalize_value(data.get("pessoa"))
-
                     if pessoa_id is None:
                         erro_lote += 1
                         total_error += 1
                         continue
 
+                    # Mapeamento de campos alternativos
+                    if "resp_e_mail" in data and "resp_email" not in data:
+                        data["resp_email"] = data["resp_e_mail"]
+
                     values = [cls._normalize_value(data.get(col)) for col in columns]
 
                     try:
                         cursor.execute(merge_sql, tuple(values))
-
                         sucesso_lote += 1
                         total_success += 1
-
                     except Exception as e:
                         logger.error(f"Pessoa {pessoa_id}: {e}")
-
                         erro_lote += 1
                         total_error += 1
 
                 try:
                     conn.commit()
-
-                    logger.info(
-                        f"Lote {lote_num} concluído. "
-                        f"Sucesso={sucesso_lote:,} "
-                        f"Erro={erro_lote:,}"
-                    )
-
+                    logger.info(f"Lote {lote_num} concluído. Sucesso={sucesso_lote:,} Erro={erro_lote:,}")
                 except Exception as e:
                     conn.rollback()
-
                     logger.error(f"Erro ao confirmar lote {lote_num}: {e}")
 
-            logger.info(
-                "Batch finalizado | "
-                f"Sucesso={total_success:,} "
-                f"Erro={total_error:,} "
-                f"Total={total:,}"
-            )
-
+            logger.info(f"Batch finalizado | Sucesso={total_success:,} Erro={total_error:,} Total={total:,}")
             return total_success
 
     @classmethod

@@ -1,6 +1,22 @@
-# sync/sync_ly_pessoa_by_id.py
+#!/usr/bin/env python3
+"""
+sync/sync_ly_pessoa_by_id.py
+
+Sincronização de pessoas pendentes usando o novo endpoint específico:
+/v2/pessoas/idPessoa/{idPessoa}/obterPessoa
+
+Características:
+- Busca IDs de alunos que não estão em LY_PESSOA (via LY_ALUNO)
+- Consulta a API para cada ID individualmente
+- Insere/atualiza a pessoa no banco local
+- Opcionalmente busca alunos associados (endpoint antigo, mantido)
+- Processamento em lotes de 100 com commit parcial
+"""
+
 import sys
+import time
 from pathlib import Path
+from typing import List, Dict, Any, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -10,6 +26,7 @@ from core.database import fetch_one, get_db_connection
 from core.logger import logger
 from models.ly_pessoa import LyPessoaModel
 from models.ly_aluno import AlunoModel
+from core.config import config
 
 
 def pessoa_existe_no_banco(cod_pessoa: int) -> bool:
@@ -19,10 +36,10 @@ def pessoa_existe_no_banco(cod_pessoa: int) -> bool:
     return result is not None
 
 
-def buscar_e_salvar_pessoa_por_id(cod_pessoa: int, buscar_alunos: bool = True) -> dict | None:
+def buscar_e_salvar_pessoa_por_id(cod_pessoa: int, buscar_alunos: bool = True) -> Optional[Dict[str, Any]]:
     """
     1. Verifica se a pessoa já existe no banco local.
-    2. Se não existir, consulta a API Lyceum (endpoint /v2/tabela/pessoas com pk[pessoa]).
+    2. Se não existir, consulta a API Lyceum via endpoint específico.
     3. Insere os dados na tabela LY_PESSOA usando LyPessoaModel.upsert().
     4. Opcionalmente, busca os alunos associados (endpoint /pessoas/{codPessoa}/alunos)
        e insere em LY_ALUNO usando AlunoModel.upsert().
@@ -36,8 +53,8 @@ def buscar_e_salvar_pessoa_por_id(cod_pessoa: int, buscar_alunos: bool = True) -
 
     pessoa_client = get_pessoa_client()
     try:
-        # 2. Buscar dados da pessoa pelo ID (usando pk[pessoa])
-        dados_pessoa = pessoa_client.get_pessoa_by_id(cod_pessoa)
+        # 2. Buscar dados da pessoa pelo ID usando o novo endpoint
+        dados_pessoa = pessoa_client.get_pessoa_detalhada(cod_pessoa)
         if not dados_pessoa:
             logger.error(f"Pessoa {cod_pessoa} não encontrada na API.")
             return None
@@ -51,7 +68,7 @@ def buscar_e_salvar_pessoa_por_id(cod_pessoa: int, buscar_alunos: bool = True) -
 
         logger.info(f"Pessoa {cod_pessoa} inserida/atualizada com sucesso.")
 
-        # 4. (Opcional) Buscar alunos relacionados
+        # 4. (Opcional) Buscar alunos relacionados - mantido do código original
         alunos_inseridos = []
         if buscar_alunos:
             aluno_client = get_aluno_client()
@@ -138,7 +155,7 @@ def buscar_e_salvar_pessoa_por_id(cod_pessoa: int, buscar_alunos: bool = True) -
         pessoa_client.close()
 
 
-def _buscar_pessoas_pendentes() -> list[int]:
+def _buscar_pessoas_pendentes() -> List[int]:
     """
     Retorna os cod_pessoa presentes em LY_ALUNO que ainda não existem em LY_PESSOA.
     Centraliza a query que antes ficava duplicada em reports/sync_pessoas.py,
@@ -165,6 +182,8 @@ def run() -> bool:
     pendentes, mas chama buscar_e_salvar_pessoa_por_id() diretamente —
     sem subprocess — garantindo execução no mesmo processo, com logs
     unificados e sem overhead de subprocesso.
+
+    Processamento em lotes de 100 registros para commits parciais.
     """
     logger.info("[sync_ly_pessoa_by_id] Verificando pessoas pendentes em LY_PESSOA...")
 
@@ -175,23 +194,42 @@ def run() -> bool:
         return False
 
     if not pendentes:
-        logger.info("[sync_ly_pessoa_by_id] Nenhuma pessoa pendente. Tabelas ja sincronizadas.")
+        logger.info("[sync_ly_pessoa_by_id] Nenhuma pessoa pendente. Tabelas já sincronizadas.")
         return True
 
     total = len(pendentes)
-    logger.info(f"[sync_ly_pessoa_by_id] {total} pessoa(s) pendente(s) para sincronizacao.")
+    logger.info(f"[sync_ly_pessoa_by_id] {total} pessoa(s) pendente(s) para sincronização.")
 
-    sucessos, falhas = 0, 0
-    for cod_pessoa in pendentes:
-        # buscar_alunos=False: alunos já foram sincronizados nas etapas anteriores
-        resultado = buscar_e_salvar_pessoa_por_id(cod_pessoa, buscar_alunos=False)
-        if resultado:
-            sucessos += 1
-        else:
-            falhas += 1
-            logger.warning(f"[sync_ly_pessoa_by_id] Falha ao sincronizar pessoa {cod_pessoa}.")
+    # Processar em lotes de 100
+    lote_tamanho = 100
+    sucessos = 0
+    falhas = 0
 
-    logger.info(f"[sync_ly_pessoa_by_id] Pessoas sincronizadas: {sucessos}/{total} | Falhas: {falhas}")
+    for i in range(0, total, lote_tamanho):
+        lote = pendentes[i:i + lote_tamanho]
+        logger.info(f"[sync_ly_pessoa_by_id] Processando lote {i//lote_tamanho + 1} (IDs {i+1} a {min(i+lote_tamanho, total)})")
+
+        for cod_pessoa in lote:
+            # buscar_alunos=False porque os alunos já são sincronizados separadamente
+            resultado = buscar_e_salvar_pessoa_por_id(cod_pessoa, buscar_alunos=False)
+            if resultado:
+                sucessos += 1
+            else:
+                falhas += 1
+                logger.warning(f"[sync_ly_pessoa_by_id] Falha ao sincronizar pessoa {cod_pessoa}.")
+
+            # Pequeno delay entre requisições para evitar sobrecarga
+            time.sleep(config.API_DELAY_BETWEEN_REQUESTS)
+
+        # Após processar o lote, fazer commit explícito
+        try:
+            with get_db_connection(database_name='lyceum') as conn:
+                conn.commit()
+            logger.info(f"[sync_ly_pessoa_by_id] Lote {i//lote_tamanho + 1} concluído. Sucessos: {sucessos}, Falhas: {falhas}")
+        except Exception as e:
+            logger.error(f"[sync_ly_pessoa_by_id] Erro ao commitar lote: {e}")
+
+    logger.info(f"[sync_ly_pessoa_by_id] Sincronização finalizada. Total de sucessos: {sucessos}/{total}, Falhas: {falhas}")
     return falhas == 0
 
 

@@ -368,7 +368,6 @@ class PessoaAPIClient(BaseAPIClient):
         endpoint = "/v2/tabela/pessoas"
         params = {"pk[pessoa]": cod_pessoa}
         data = self.get(endpoint, params=params)
-        
         print(f"DEBUG - Resposta da API para pessoa {cod_pessoa}: {data}")
 
         if isinstance(data, dict) and 'data' in data:
@@ -379,7 +378,19 @@ class PessoaAPIClient(BaseAPIClient):
             return data
         elif isinstance(data, list) and len(data) > 0:
             return data[0]
-        
+        return None
+
+    def get_pessoa_detalhada(self, id_pessoa: int) -> Optional[dict]:
+        """
+        Busca uma pessoa pelo ID usando o endpoint específico:
+        /v2/pessoas/idPessoa/{idPessoa}/obterPessoa
+        """
+        endpoint = f"/v2/pessoas/idPessoa/{id_pessoa}/obterPessoa"
+        data = self.get(endpoint)
+        if data and isinstance(data, dict):
+            if 'data' in data:
+                return data['data']
+            return data
         return None
 
 
