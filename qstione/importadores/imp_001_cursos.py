@@ -1,4 +1,13 @@
 # qstione/importadores/imp_001_cursos.py
+import sys
+import os
+
+# Adiciona o diretório raiz do projeto (aluno-sync) ao sys.path
+# __file__ é o caminho para este arquivo.
+# Os.path.dirname duas vezes sobe de .../qstione/importadores para .../aluno-sync
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Agora os imports funcionam
 from core.database import get_db_connection
 from qstione.core.transformacoes import (
     valor_fixo_4000000001,

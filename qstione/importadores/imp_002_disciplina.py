@@ -1,10 +1,25 @@
+#!/usr/bin/env python3
 # qstione/importadores/imp_002_disciplina.py
 """
-Importador para tabela imp_002_disciplina
-Origem: LY_DISCIPLINA + LY_GRADE + LY_CURSO
-Filtros: FACULDADES_INCLUIDAS (curso) e AREAS_CONHECIMENTO_INCLUIDAS (disciplina)
-Período extraído de LY_GRADE.serie_ideal (não fixo)
+Importador para imp_002_disciplina
+Fonte: LY_MATRICULA -> LY_TURMA -> LY_ALUNO -> LY_CURSO, LY_DISCIPLINA, LY_GRADE
+Filtros:
+- Ano e semestre vigentes (via filtros)
+- Alunos ativos
+- Cursos da lista fixa (CURSOS_INCLUIDOS) – tanto do aluno quanto da turma
+- Faculdades permitidas (FACULDADES_INCLUIDAS) ou curso nulo (vira '999')
+- Cursos nulos em LY_TURMA são mapeados para '999' (disciplina compartilhada)
+- Nome da disciplina obtido de LY_DISCIPLINA.nome
+- Período obtido de LY_GRADE.serie_ideal (usando curso da turma, ou curso do aluno como fallback)
+- Mapeamento unificado de cursos (códigos duplicados agrupados)
+- Código da disciplina com sufixo do nome do curso unificado
 """
+
+import sys
+import os
+import logging
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from core.database import get_db_connection
 from qstione.core.transformacoes import (
@@ -14,19 +29,80 @@ from qstione.core.transformacoes import (
 )
 from qstione.core.validacoes import (
     validar_codigo_disciplina,
-    validar_nome_disciplina,
     validar_codigo_curso
 )
 from qstione.config.filtros import (
+    ANO_VIGENTE,
+    PERIODOS_VIGENTES,
     FACULDADES_INCLUIDAS,
-    AREAS_CONHECIMENTO_INCLUIDAS
 )
+
+# =============================================================================
+# MAPEAMENTO DE CURSOS – UNIFICAÇÃO DE CÓDIGOS
+# =============================================================================
+MAPEAMENTO_CURSOS = {
+    '034': ('034', 'ADMINISTRAÇÃO'),
+    '064': ('064', 'CIÊNCIAS BIOLÓGICAS'),
+    '062': ('064', 'CIÊNCIAS BIOLÓGICAS'),
+    '057': ('064', 'CIÊNCIAS BIOLÓGICAS'),
+    '009': ('009', 'CIÊNCIAS CONTÁBEIS'),
+    '023': ('009', 'CIÊNCIAS CONTÁBEIS'),
+    '055': ('055', 'CURSO SUPERIOR DE TECNOLOGIA EM GESTÃO DE RECURSOS HUMANOS'),
+    '056': ('056', 'DESIGN'),
+    '141': ('056', 'DESIGN'),
+    '031': ('031', 'DIREITO'),
+    '065': ('065', 'EDUCAÇÃO FÍSICA'),
+    '036': ('065', 'EDUCAÇÃO FÍSICA'),
+    '037': ('065', 'EDUCAÇÃO FÍSICA'),
+    '013': ('013', 'ENFERMAGEM'),
+    '079': ('079', 'ENGENHARIA'),
+    '006': ('006', 'ENGENHARIA CIVIL'),
+    '020': ('006', 'ENGENHARIA CIVIL'),
+    '097': ('097', 'ENGENHARIA DA COMPUTAÇÃO'),
+    '059': ('059', 'ENGENHARIA DE PRODUÇÃO'),
+    '142': ('059', 'ENGENHARIA DE PRODUÇÃO'),
+    '044': ('044', 'ENGENHARIA ELÉTRICA'),
+    '139': ('044', 'ENGENHARIA ELÉTRICA'),
+    '017': ('017', 'ENGENHARIA MECÂNICA'),
+    '132': ('017', 'ENGENHARIA MECÂNICA'),
+    '126': ('126', 'FARMÁCIA'),
+    '060': ('060', 'JORNALISMO'),
+    '014': ('014', 'MEDICINA'),
+    '024': ('024', 'NUTRIÇÃO'),
+    '007': ('007', 'ODONTOLOGIA'),
+    '130': ('007', 'ODONTOLOGIA'),
+    '128': ('128', 'PEDAGOGIA'),
+    '145': ('145', 'PSICOLOGIA'),
+    '061': ('061', 'PUBLICIDADE E PROPAGANDA'),
+    '025': ('025', 'SERVIÇO SOCIAL'),
+    '019': ('019', 'SISTEMAS DE INFORMAÇÃO'),
+    '999': ('999', 'COMPARTILHADA'),  # para consistência
+}
+
+# Lista fixa de cursos (originais, incluindo '999')
+CURSOS_INCLUIDOS = [
+    '034', '064', '062', '009', '023', '055', '051', '010',
+    '056', '141', '031', '065', '013', '079', '016', '006',
+    '020', '097', '059', '142', '044', '139', '017', '132',
+    '126', '057', '037', '047', '060', '058', '036', '014',
+    '024', '007', '130', '128', '145', '061', '025', '019',
+    '999'
+]
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 class ImportadorDisciplinas:
 
     def __init__(self):
-        pass
+        self.cursos_placeholders = ','.join(['?'] * len(CURSOS_INCLUIDOS))
+        self.periodos_placeholders = ','.join(['?'] * len(PERIODOS_VIGENTES))
+        self.faculdades_placeholders = ','.join(['?'] * len(FACULDADES_INCLUIDAS))
 
     # -------------------------------------------------------------------------
     # Funções auxiliares para tabela destino
@@ -41,7 +117,7 @@ class ImportadorDisciplinas:
                 """, (nome_tabela,))
                 return cursor.fetchone() is not None
         except Exception as e:
-            print(f"  ⚠️  Erro ao verificar existência da tabela: {e}")
+            logger.warning(f"Erro ao verificar existência da tabela: {e}")
             return False
 
     def _indice_existe(self, nome_indice: str) -> bool:
@@ -51,34 +127,15 @@ class ImportadorDisciplinas:
                 cursor.execute("SELECT 1 FROM sys.indexes WHERE name = ?", (nome_indice,))
                 return cursor.fetchone() is not None
         except Exception as e:
-            print(f"  ⚠️  Erro ao verificar índice: {e}")
+            logger.warning(f"Erro ao verificar índice: {e}")
             return False
 
     def _criar_tabela(self):
         if self._tabela_existe('imp_002_disciplina'):
-            try:
-                with get_db_connection(database_name='qstione') as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-                        WHERE TABLE_NAME = 'imp_002_disciplina'
-                          AND COLUMN_NAME IN ('data_criacao', 'data_atualizacao')
-                    """)
-                    colunas = [row[0] for row in cursor.fetchall()]
-                    if 'data_criacao' in colunas and 'data_atualizacao' in colunas:
-                        print("✅ Tabela imp_002_disciplina já existe com estrutura correta.")
-                        return
-                    else:
-                        print("⚠️  Colunas ausentes. Recriando tabela...")
-                        cursor.execute("DROP TABLE imp_002_disciplina")
-                        conn.commit()
-            except Exception as e:
-                print(f"⚠️  Erro ao verificar colunas: {e}. Recriando tabela...")
-                with get_db_connection(database_name='qstione') as conn:
-                    conn.execute("DROP TABLE IF EXISTS imp_002_disciplina")
-                    conn.commit()
+            logger.info("✅ Tabela imp_002_disciplina já existe.")
+            return
 
-        print("🆕 Criando tabela imp_002_disciplina...")
+        logger.info("🆕 Criando tabela imp_002_disciplina...")
         create_sql = """
             CREATE TABLE imp_002_disciplina (
                 codigoDisciplina NVARCHAR(30) NOT NULL,
@@ -94,9 +151,9 @@ class ImportadorDisciplinas:
             with get_db_connection(database_name='qstione') as conn:
                 conn.execute(create_sql)
                 conn.commit()
-            print("✅ Tabela criada.")
+            logger.info("✅ Tabela criada.")
         except Exception as e:
-            print(f"❌ Erro ao criar tabela: {e}")
+            logger.error(f"❌ Erro ao criar tabela: {e}")
             return
 
         indices = [
@@ -109,133 +166,145 @@ class ImportadorDisciplinas:
                     with get_db_connection(database_name='qstione') as conn:
                         conn.execute(sql_idx)
                         conn.commit()
-                    print(f"✅ Índice {nome_idx} criado.")
+                    logger.info(f"✅ Índice {nome_idx} criado.")
                 except Exception as e:
-                    print(f"⚠️ Índice {nome_idx} não pôde ser criado: {e}")
-            else:
-                print(f"✅ Índice {nome_idx} já existe.")
+                    logger.warning(f"⚠️ Índice {nome_idx} não pôde ser criado: {e}")
 
     # -------------------------------------------------------------------------
-    # Obter dados do Lyceum (disciplina + cursos + períodos) com filtros
+    # Obter dados do Lyceum com JOINs LY_DISCIPLINA e LY_GRADE
     # -------------------------------------------------------------------------
     def obter_dados_lyceum(self):
-        """Retorna todas as combinações disciplina/curso que atendem aos filtros."""
-        faculdades_placeholders = ','.join(['?'] * len(FACULDADES_INCLUIDAS))
-        areas_placeholders = ','.join(['?'] * len(AREAS_CONHECIMENTO_INCLUIDAS))
-
         query = f"""
             SELECT DISTINCT
-                d.disciplina,
-                d.nome_compl,
-                g.curso,
-                c.nome as nome_curso,
+                t.disciplina,
+                d.nome AS nome_disciplina,
+                t.curso,
+                a.curso AS curso_aluno,
                 g.serie_ideal
-            FROM LY_GRADE g
-            INNER JOIN LY_DISCIPLINA d ON d.disciplina = g.disciplina
-            INNER JOIN LY_CURSO c ON c.curso = g.curso
-            WHERE c.ativo = 'S'
-              AND c.faculdade IN ({faculdades_placeholders})
-              AND (d.area_conhecimento IN ({areas_placeholders})
-                   OR d.area_conhecimento IS NULL
-                   OR d.area_conhecimento = '')
-            ORDER BY d.disciplina, g.curso
+            FROM LY_MATRICULA m
+            INNER JOIN LY_TURMA t ON m.turma = t.turma
+            INNER JOIN LY_ALUNO a ON a.aluno = m.aluno
+            LEFT JOIN LY_CURSO c ON c.curso = t.curso
+            LEFT JOIN LY_DISCIPLINA d ON d.disciplina = t.disciplina
+            LEFT JOIN LY_GRADE g ON g.disciplina = t.disciplina 
+                AND g.curso = COALESCE(t.curso, a.curso)
+            WHERE m.ano = ?
+              AND m.semestre IN ({self.periodos_placeholders})
+              AND a.sit_aluno = 'Ativo'
+              AND a.curso IN ({self.cursos_placeholders})
+              AND t.sit_turma = 'aberta'
+              AND (t.curso IN ({self.cursos_placeholders}) OR t.curso IS NULL)
+              AND (c.faculdade IN ({self.faculdades_placeholders}) OR c.faculdade IS NULL)
+            ORDER BY t.disciplina, t.curso
         """
-        params = (*FACULDADES_INCLUIDAS, *AREAS_CONHECIMENTO_INCLUIDAS)
+        params = (
+            ANO_VIGENTE,
+            *PERIODOS_VIGENTES,
+            *CURSOS_INCLUIDOS,   # a.curso
+            *CURSOS_INCLUIDOS,   # t.curso IN (...)
+            *FACULDADES_INCLUIDAS
+        )
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
             return cursor.fetchall()
 
     # -------------------------------------------------------------------------
-    # Transformar dados (agregando por disciplina)
+    # Transformar dados com mapeamento de cursos e nome real da disciplina
     # -------------------------------------------------------------------------
     def transformar_dados(self, dados_lyceum):
-        """
-        Estrutura: {disciplina: {"nome_compl": nome, "cursos": {curso: {"nome_curso": nome, "periodos": set()}}}
-        """
         disciplinas = {}
-        for disciplina, nome_compl, curso, nome_curso, serie_ideal in dados_lyceum:
+        for disciplina, nome_disciplina, curso, curso_aluno, serie_ideal in dados_lyceum:
+            # Tratar curso nulo/vazio como '999' (compartilhada)
+            if curso is None or curso == '':
+                curso = '999'
+
+            # Aplicar mapeamento de curso (unificação)
+            if curso in MAPEAMENTO_CURSOS:
+                curso_unificado, nome_curso_unificado = MAPEAMENTO_CURSOS[curso]
+            else:
+                curso_unificado = curso
+                nome_curso_unificado = curso  # fallback
+
+            # Se for curso '999', forçamos nome "COMPARTILHADA"
+            if curso == '999':
+                nome_curso_unificado = 'COMPARTILHADA'
+
             if disciplina not in disciplinas:
                 disciplinas[disciplina] = {
-                    "nome_compl": nome_compl,
+                    "nome_disciplina": nome_disciplina,
                     "cursos": {}
                 }
-            if curso not in disciplinas[disciplina]["cursos"]:
-                disciplinas[disciplina]["cursos"][curso] = {
-                    "nome_curso": nome_curso,
+            if curso_unificado not in disciplinas[disciplina]["cursos"]:
+                disciplinas[disciplina]["cursos"][curso_unificado] = {
+                    "nome_curso": nome_curso_unificado,
                     "periodos": set()
                 }
-            disciplinas[disciplina]["cursos"][curso]["periodos"].add(serie_ideal)
+            # Adiciona o período (serie_ideal) ao conjunto
+            if serie_ideal is not None:
+                disciplinas[disciplina]["cursos"][curso_unificado]["periodos"].add(serie_ideal)
 
         dados_transformados = []
         cont_periodo_zero = 0
 
         for disciplina, info in disciplinas.items():
-            nome_compl = info["nome_compl"]
-            cursos = info["cursos"]
+            nome_disciplina_original = info["nome_disciplina"]
+            cursos_info = info["cursos"]
 
-            # Validar código da disciplina
             if not validar_codigo_disciplina(disciplina):
-                print(f"  ⚠️  Código da disciplina inválido: {disciplina}")
+                logger.warning(f"Código da disciplina inválido: {disciplina}")
                 continue
 
-            # Validar/normalizar nome da disciplina
-            nome_disciplina = validar_nome_disciplina(nome_compl)
-            if nome_disciplina is None:
-                nome_disciplina = truncar_texto(nome_compl, 100)
-                if not nome_disciplina:
-                    print(f"  ⚠️  Nome da disciplina inválido após truncagem: {nome_compl}")
-                    continue
-                print(f"  ⚠️  Nome da disciplina truncado para 100 caracteres: {nome_disciplina}")
-
-            # Determinar se é compartilhada (mais de um curso)
-            if len(cursos) > 1:
-                codigo_curso = '999'
-                nome_curso = 'TURMAS COMPARTILHADAS'
-                # Período = menor valor entre todos os períodos de todos os cursos
-                todos_periodos = set()
-                for c in cursos.values():
-                    todos_periodos.update(c["periodos"])
-                periodos_int = [converter_inteiro(p) for p in todos_periodos if p is not None]
-                if not periodos_int:
-                    print(f"  ⚠️  Nenhum período válido para disciplina {disciplina}")
-                    continue
-                periodo = min(periodos_int)
+            # Nome da disciplina: prioriza o nome da tabela LY_DISCIPLINA, senão usa o código
+            if nome_disciplina_original:
+                nome_disciplina = truncar_texto(nome_disciplina_original, 100)
             else:
-                codigo_curso, curso_info = next(iter(cursos.items()))
-                nome_curso = curso_info["nome_curso"]
-                periodo_raw = next(iter(curso_info["periodos"]))
-                periodo = converter_inteiro(periodo_raw)
+                nome_disciplina = truncar_texto(disciplina, 100)
+                logger.debug(f"Nome da disciplina não encontrado, usando código: {disciplina}")
 
-            # Converter período 0 -> 1
-            if periodo == 0:
-                periodo = 1
-                cont_periodo_zero += 1
-                print(f"  ⚠️  Período 0 convertido para 1 na disciplina {disciplina} (curso {codigo_curso})")
+            for curso_unificado, curso_data in cursos_info.items():
+                nome_curso = curso_data["nome_curso"]
+                periodos = curso_data["periodos"]
 
-            if periodo is None or periodo < 1:
-                print(f"  ⚠️  Período inválido para disciplina {disciplina}: {periodo}")
-                continue
+                # Se não houver períodos, usa 1 como padrão
+                if not periodos:
+                    periodo = 1
+                    logger.warning(f"Sem período definido para disciplina {disciplina} (curso {curso_unificado}), usando 1")
+                else:
+                    periodo_raw = min(periodos)
+                    periodo = converter_inteiro(periodo_raw)
 
-            if not validar_codigo_curso(codigo_curso):
-                print(f"  ⚠️  Código do curso inválido: {codigo_curso} para disciplina {disciplina}")
-                continue
+                    if periodo == 0:
+                        periodo = 1
+                        cont_periodo_zero += 1
+                        logger.warning(f"Período 0 convertido para 1 na disciplina {disciplina} (curso {curso_unificado})")
 
-            codigo_disciplina_final = gerar_codigo_disciplina_curso(
-                disciplina,
-                nome_curso,
-                codigo_curso
-            )
+                if periodo is None or periodo < 1:
+                    logger.warning(f"Período inválido para disciplina {disciplina}: {periodo}")
+                    continue
 
-            dados_transformados.append({
-                'codigoDisciplina': codigo_disciplina_final,
-                'nomeDisciplina': nome_disciplina,
-                'codigoCurso': str(codigo_curso)[:30],
-                'periodo': periodo
-            })
+                # Se for curso '999', não validar com validar_codigo_curso
+                if curso_unificado != '999':
+                    if not validar_codigo_curso(curso_unificado):
+                        logger.warning(f"Código do curso inválido: {curso_unificado} para disciplina {disciplina}")
+                        continue
+
+                # Gera código da disciplina com sufixo do nome do curso (unificado)
+                codigo_disciplina_final = gerar_codigo_disciplina_curso(
+                    disciplina,
+                    nome_curso,
+                    curso_unificado
+                )
+
+                dados_transformados.append({
+                    'codigoDisciplina': codigo_disciplina_final,
+                    'nomeDisciplina': nome_disciplina,
+                    'codigoCurso': str(curso_unificado)[:30],
+                    'periodo': periodo
+                })
 
         if cont_periodo_zero > 0:
-            print(f"  ⚠️  Total de disciplinas com período 0 convertidas para 1: {cont_periodo_zero}")
+            logger.info(f"Total de disciplinas com período 0 convertidas para 1: {cont_periodo_zero}")
         return dados_transformados
 
     # -------------------------------------------------------------------------
@@ -287,7 +356,7 @@ class ImportadorDisciplinas:
 
                 except Exception as e:
                     total_erros += 1
-                    print(f"  ✗  Erro ao importar {reg['codigoDisciplina']} - {reg['codigoCurso']} - {reg['periodo']}: {e}")
+                    logger.error(f"Erro ao importar {reg['codigoDisciplina']} - {reg['codigoCurso']} - {reg['periodo']}: {e}")
 
             conn.commit()
 
@@ -302,36 +371,33 @@ class ImportadorDisciplinas:
     # Execução principal
     # -------------------------------------------------------------------------
     def executar_importacao(self):
-        print("=" * 70)
-        print("IMPORTAÇÃO: imp_002_disciplina (com filtros e período variável)")
-        print("=" * 70)
-        print(f"FACULDADES_INCLUIDAS: {FACULDADES_INCLUIDAS}")
-        print(f"AREAS_CONHECIMENTO_INCLUIDAS: {AREAS_CONHECIMENTO_INCLUIDAS}")
+        logger.info("=" * 70)
+        logger.info("IMPORTAÇÃO: imp_002_disciplina (com nome e período vindos das tabelas corretas)")
+        logger.info("=" * 70)
+        logger.info(f"ANO_VIGENTE: {ANO_VIGENTE}")
+        logger.info(f"PERIODOS_VIGENTES: {PERIODOS_VIGENTES}")
+        logger.info(f"FACULDADES_INCLUIDAS: {FACULDADES_INCLUIDAS}")
+        logger.info(f"CURSOS_INCLUIDOS ({len(CURSOS_INCLUIDOS)} cursos)")
 
-        # 1. Obter dados do Lyceum
         dados_lyceum = self.obter_dados_lyceum()
-        print(f"📊 Combinações disciplina/curso encontradas: {len(dados_lyceum)}")
+        logger.info(f"📊 Combinações disciplina/curso encontradas: {len(dados_lyceum)}")
 
-        # 2. Transformar dados
-        print("🔄 Transformando dados...")
+        logger.info("🔄 Transformando dados (aplicando mapeamento de cursos)...")
         dados_transformados = self.transformar_dados(dados_lyceum)
-        print(f"✅ Registros únicos para importação: {len(dados_transformados)}")
+        logger.info(f"✅ Registros únicos para importação: {len(dados_transformados)}")
 
-        # 3. Importar para Qstione
-        print("💾 Importando para banco Qstione...")
+        logger.info("💾 Importando para banco Qstione...")
         resultado = self.importar_para_qstione(dados_transformados)
 
-        print(f"\n📈 RESULTADO DA IMPORTAÇÃO:")
-        print(f"  ✓ Inseridos: {resultado['total_inseridos']}")
-        print(f"  ↻ Atualizados: {resultado['total_atualizados']}")
-        print(f"  ✗ Erros: {resultado['total_erros']}")
-        print(f"  📋 Total processados: {resultado['total_processados']}")
+        logger.info(f"\n📈 RESULTADO DA IMPORTAÇÃO:")
+        logger.info(f"  ✓ Inseridos: {resultado['total_inseridos']}")
+        logger.info(f"  ↻ Atualizados: {resultado['total_atualizados']}")
+        logger.info(f"  ✗ Erros: {resultado['total_erros']}")
+        logger.info(f"  📋 Total processados: {resultado['total_processados']}")
 
         return dados_transformados
 
 
 if __name__ == "__main__":
-    import logging
-    logging.basicConfig(level=logging.INFO)
     importador = ImportadorDisciplinas()
     importador.executar_importacao()

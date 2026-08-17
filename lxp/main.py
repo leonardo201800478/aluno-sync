@@ -1,13 +1,12 @@
 # lxp/main.py
 import sys
 from pathlib import Path
-# Adiciona a raiz do projeto ao path para permitir imports absolutos
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.logger import logger
 from lxp.exportadores import exp_001_cursos, exp_002_curriculum, exp_003_enrollment, exp_004_desenturmar_alunos_cursos_livres_ead
 import sync.sync_ly_alunos
-
+from models.ly_aluno import AlunoModel
 
 EXPORTADORES = [
     ("Cursos", exp_001_cursos),
@@ -28,6 +27,18 @@ def run() -> bool:
         logger.info("Sincronização de alunos concluída com sucesso.")
     except Exception as e:
         logger.exception(f"Erro crítico ao executar sync_ly_alunos: {e}")
+        return False
+
+    # Verifica se a tabela tem registros
+    logger.info("Verificando quantidade de registros na tabela LY_ALUNO...")
+    try:
+        total_alunos = len(AlunoModel.get_all_matriculas())
+        logger.info(f"Total de registros na tabela LY_ALUNO: {total_alunos}")
+        if total_alunos == 0:
+            logger.error("Tabela LY_ALUNO está vazia. Abortando exportação para evitar arquivos vazios.")
+            return False
+    except Exception as e:
+        logger.error(f"Erro ao contar registros: {e}")
         return False
 
     # Etapa 2: Executar os exportadores LXP
