@@ -15,17 +15,10 @@ def extrair_usuario_email(email):
         return None
     
     email_str = str(email).strip()
-    
-    # Encontrar a posição do '@'
     pos_arroba = email_str.find('@')
-    
     if pos_arroba > 0:
-        # Extrair parte antes do '@' e converter para minúsculas
-        usuario = email_str[:pos_arroba].lower()
-        return usuario
-    else:
-        # Se não encontrar '@', retorna o email em minúsculas
-        return email_str.lower()
+        return email_str[:pos_arroba].lower()
+    return email_str.lower()
 
 def converter_minusculas(texto):
     """Converte texto para minúsculas"""
@@ -37,7 +30,6 @@ def converter_inteiro(valor):
     """Converte valor para inteiro"""
     if valor is None:
         return None
-    
     try:
         return int(float(valor))
     except (ValueError, TypeError):
@@ -59,19 +51,15 @@ def formatar_cpf(cpf):
     """Formata CPF para o padrão 000.000.000-00"""
     if not cpf:
         return None
-    
     cpf_str = str(cpf).replace('.', '').replace('-', '').strip()
-    
     if len(cpf_str) == 11 and cpf_str.isdigit():
         return f"{cpf_str[:3]}.{cpf_str[3:6]}.{cpf_str[6:9]}-{cpf_str[9:]}"
-    
     return cpf_str
 
 def truncar_texto(texto, limite=None):
     """Trunca texto para o limite especificado"""
     if limite is None:
         limite = 100
-    
     if texto and len(str(texto)) > limite:
         return str(texto)[:limite]
     return texto
@@ -80,197 +68,121 @@ def remover_acentos(texto):
     """Remove acentos do texto"""
     if not texto:
         return texto
-    
     texto = unicodedata.normalize('NFD', str(texto))
-    texto = texto.encode('ascii', 'ignore').decode('utf-8')
-    return texto
+    return texto.encode('ascii', 'ignore').decode('utf-8')
 
 def gerar_codigo_disciplina_curso(codigo_disciplina, nome_curso, curso_id):
     """
-    Gera código da disciplina formatado: código-disciplina + '-' + iniciais do curso
-    
-    Args:
-        codigo_disciplina (str): Código original da disciplina
-        nome_curso (str): Nome do curso
-        curso_id (str): ID do curso (para verificar se é medicina)
-    
-    Returns:
-        str: Código formatado da disciplina
+    Gera código da disciplina formatado: código-disciplina + '-' + iniciais do curso.
+    Para Medicina (005/014), mantém somente o código original da disciplina.
     """
-    # Se for curso de medicina (IDs 005 ou 014), retorna apenas o código da disciplina
     if curso_id in ['005', '014']:
         return str(codigo_disciplina)[:30]
-    
-    # Extrair as três primeiras letras de cada palavra do nome do curso
+
     palavras = str(nome_curso).strip().split()
     iniciais = []
-    
     for palavra in palavras:
-        # Remover caracteres especiais e pegar as 3 primeiras letras
         palavra_limpa = re.sub(r'[^a-zA-ZÀ-ÿ]', '', palavra)
         if len(palavra_limpa) >= 3:
             iniciais.append(palavra_limpa[:3].upper())
-        elif len(palavra_limpa) > 0:
+        elif palavra_limpa:
             iniciais.append(palavra_limpa.upper())
-    
-    # Juntar as iniciais
+
     iniciais_str = ''.join(iniciais)
-    
-    # Montar código final: código-disciplina + '-' + iniciais
-    if iniciais_str:
-        codigo_final = f"{codigo_disciplina}-{iniciais_str}"
-    else:
-        codigo_final = str(codigo_disciplina)
-    
-    # Limitar a 30 caracteres
+    codigo_final = f"{codigo_disciplina}-{iniciais_str}" if iniciais_str else str(codigo_disciplina)
     return codigo_final[:30]
 
 def extrair_iniciais_curso(nome_curso, limite=30):
-    """
-    Extrai as três primeiras letras de cada palavra do nome do curso
-    
-    Args:
-        nome_curso (str): Nome do curso
-        limite (int): Limite máximo de caracteres para as iniciais
-    
-    Returns:
-        str: Iniciais concatenadas
-    """
+    """Extrai as três primeiras letras de cada palavra do nome do curso."""
     if not nome_curso:
         return ""
-    
     palavras = str(nome_curso).strip().split()
     iniciais = []
-    
     for palavra in palavras:
-        # Remover caracteres não alfabéticos e pegar as 3 primeiras letras
         palavra_limpa = re.sub(r'[^a-zA-ZÀ-ÿ]', '', palavra)
         if len(palavra_limpa) >= 3:
             iniciais.append(palavra_limpa[:3].upper())
-        elif len(palavra_limpa) > 0:
+        elif palavra_limpa:
             iniciais.append(palavra_limpa.upper())
-    
-    # Juntar as iniciais
-    iniciais_str = ''.join(iniciais)
-    
-    # Limitar ao tamanho máximo
-    return iniciais_str[:limite]
+    return ''.join(iniciais)[:limite]
 
 def gerar_codigo_oferta(disciplina, turma, ano, semestre):
-    """
-    Gera código da oferta: disciplina + '_' + turma + '_' + ano + semestre
-    """
+    """Gera código da oferta: disciplina + '_' + turma + '_' + ano + semestre."""
     if not all([disciplina, turma, ano, semestre]):
         return None
-    
-    codigo = f"{disciplina}_{turma}_{ano}{semestre}"
-    return codigo[:30]
+    return f"{disciplina}_{turma}_{ano}{semestre}"[:30]
 
 def gerar_codigo_disciplina_oferta(disciplina, nome_curso, curso_id):
-    """
-    Função auxiliar para gerar código da disciplina para ofertas
-    (Usa a mesma lógica de gerar_codigo_disciplina_curso)
-    """
+    """Gera código de disciplina de oferta usando a mesma regra do imp_002."""
     return gerar_codigo_disciplina_curso(disciplina, nome_curso, curso_id)
 
 def gerar_codigo_tipo_oferta(turma):
     """
-    Determina o tipo de oferta com base no início do código da turma:
-    T0 -> REG, T2 -> REC, T3 -> REP
+    Determina o tipo da oferta.
+
+    Regras do Lyceum utilizadas pelo projeto:
+    - T0* -> REG (regular)
+    - T2* -> REC (recuperação)
+    - T3* -> REP (reposição/reprovação)
+    - E*   -> REG (turmas especiais que, no conjunto atual do Lyceum,
+      continuam sendo ofertas regulares)
+
+    O reconhecimento de E* é necessário porque existem turmas reais como
+    E253_E10N, E253_E8N e E263_E07N. Sem essa regra elas produzem NULL em
+    codigoTipoOferta, que é uma coluna NOT NULL da imp_005_ofertas.
     """
     if not turma:
         return None
-    
-    turma_str = str(turma).strip()
-    
-    if turma_str.startswith('T0'):
+
+    turma_str = str(turma).strip().upper()
+    if turma_str.startswith('T0') or turma_str.startswith('E'):
         return 'REG'
-    elif turma_str.startswith('T2'):
+    if turma_str.startswith('T2'):
         return 'REC'
-    elif turma_str.startswith('T3'):
+    if turma_str.startswith('T3'):
         return 'REP'
-    else:
-        return None
+    return None
 
 def gerar_codigo_oferta_origem(disciplina, turma, ano, semestre, turmas_regulares):
-    """
-    Gera código da oferta de origem para turmas REC ou REP
-    """
+    """Gera código da oferta de origem para turmas REC ou REP."""
     if not turma or not turma.startswith(('T2', 'T3')):
         return ''
-    
-    # Buscar turma regular correspondente
     turma_regular = None
     for reg_turma in turmas_regulares.get((disciplina, ano, semestre), []):
         if reg_turma.startswith('T0'):
             turma_regular = reg_turma
             break
-    
     if turma_regular:
         return gerar_codigo_oferta(disciplina, turma_regular, ano, semestre)
-    
     return ''
 
 def gerar_email_aluno(matricula, unidade_ensino):
-    """
-    Gera o e-mail do aluno baseado na unidade de ensino.
-    
-    Args:
-        matricula (str): Matrícula do aluno
-        unidade_ensino (str): Código da unidade de ensino
-    
-    Returns:
-        str: E-mail formatado em minúsculas
-    """
+    """Gera o e-mail do aluno baseado na unidade de ensino."""
     if not matricula:
         return None
-    
     matricula_str = str(matricula).strip()
-    if unidade_ensino == '007':
-        dominio = '@etecfoa.com.br'
-    else:
-        dominio = '@unifoa.edu.br'
-    
+    dominio = '@etecfoa.com.br' if unidade_ensino == '007' else '@unifoa.edu.br'
     return (matricula_str + dominio).lower()
 
 def determinar_papel_usuario(num_func, curso, coordenadores_dict):
-    """
-    Determina o papel do usuário: 'C' para coordenador, 'P' para professor
-    
-    Args:
-        num_func (str): Número do funcionário
-        curso (str): Código do curso
-        coordenadores_dict (dict): Dicionário com coordenadores {(num_func, curso): True}
-    
-    Returns:
-        str: 'C' para coordenador, 'P' para professor
-    """
+    """Determina o papel do usuário: C para coordenador, P para professor."""
     if not num_func or not curso:
-        return 'P'  # Default para professor
-    
-    # Verifica se o par (num_func, curso) está no dicionário de coordenadores
+        return 'P'
     if (str(num_func), str(curso)) in coordenadores_dict:
-        return 'C'  # Coordenador
-    
-    return 'P'  # Professor
+        return 'C'
+    return 'P'
 
 def mapear_turno(turno):
-    """
-    Mapeia o turno para os valores possíveis: M, T, N, I, O
-    """
+    """Mapeia o turno para M, T, N, I ou O."""
     if not turno:
         return None
-    
     turno_str = str(turno).strip().upper()
-    
-    # Mapeamento básico (pode ser ajustado conforme necessidade)
     if turno_str in ['M', 'MANHÃ', 'MANHA', 'MANH']:
         return 'M'
-    elif turno_str in ['T', 'TARDE', 'TARD']:
+    if turno_str in ['T', 'TARDE', 'TARD']:
         return 'T'
-    elif turno_str in ['N', 'NOITE', 'NOIT']:
+    if turno_str in ['N', 'NOITE', 'NOIT']:
         return 'N'
-    elif turno_str in ['I', 'INTEGRAL', 'INT']:
+    if turno_str in ['I', 'INTEGRAL', 'INT']:
         return 'I'
-    else:
-        return 'O'
+    return 'O'
