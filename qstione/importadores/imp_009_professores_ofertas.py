@@ -2,9 +2,8 @@
 qstione/importadores/imp_009_professores_ofertas.py
 Importador independente para imp_009_professores_ofertas.
 
-O codigoOferta permanece exatamente o mesmo usado pelo imp_005_ofertas,
-pois essa tabela referencia a oferta. O curso/disciplinas usados na origem
-são normalizados pelo mesmo MAPEAMENTO_CURSOS do imp_002.
+O codigoOferta permanece exatamente o mesmo usado pelo imp_005_ofertas.
+O e-mail do professor é sempre obtido de LY_DOCENTE.mailbox.
 """
 
 import os
@@ -66,7 +65,7 @@ class ImportadorProfessoresOfertas:
         with get_db_connection() as conn:
             query = f"""
                 SELECT DISTINCT
-                    t.disciplina, t.turma, t.ano, t.semestre, d.email, t.curso
+                    t.disciplina, t.turma, t.ano, t.semestre, d.mailbox, t.curso
                 FROM LY_TURMA t
                 INNER JOIN LY_DISCIPLINA dsc ON dsc.disciplina = t.disciplina
                 INNER JOIN LY_TURMA_DOCENTE td
@@ -79,8 +78,8 @@ class ImportadorProfessoresOfertas:
                   AND dsc.faculdade IN ({faculdades})
                   AND (dsc.area_conhecimento IN ({areas_sql}) OR dsc.area_conhecimento IS NULL OR dsc.area_conhecimento = '')
                   AND d.ativo = 'S'
-                  AND d.email IS NOT NULL AND d.email != ''
-                ORDER BY t.disciplina, t.turma, d.email
+                  AND d.mailbox IS NOT NULL AND d.mailbox != ''
+                ORDER BY t.disciplina, t.turma, d.mailbox
             """
             params = [ANO_VIGENTE, *PERIODOS_VIGENTES, SITUACAO_TURMA_VALIDA, *FACULDADES_INCLUIDAS, *areas]
             return conn.execute(query, params).fetchall()
@@ -91,14 +90,12 @@ class ImportadorProfessoresOfertas:
             if not validar_codigo_disciplina(disciplina) or not validar_email(email):
                 continue
             curso_unificado = self._curso_unificado(curso)
-            # O ID da oferta é mantido com a disciplina original para ser idêntico ao imp_005.
             codigo_oferta = truncar_texto(gerar_codigo_oferta(disciplina, turma, ano, semestre), 30)
             resultado.append({
                 'codigoOferta': codigo_oferta,
                 'emailProfessor': truncar_texto(converter_minusculas(email), 100),
                 'codigoCurso': truncar_texto(curso_unificado, 30),
             })
-        # Uma mesma oferta pode aparecer mais de uma vez pelo JOIN de cursos.
         unicos = {}
         for reg in resultado:
             unicos[(reg['codigoOferta'], reg['emailProfessor'])] = reg
