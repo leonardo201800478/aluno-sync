@@ -1,241 +1,140 @@
 """
 qstione/importadores/imp_011_alunos_ofertas.py
-Importador para tabela imp_011_alunos_ofertas (Alunos das Ofertas de Disciplinas)
-Adaptado para SQL Server – corrigido: PK sem coluna anulável.
+Importador independente para alunos das ofertas.
+
+O codigoCurso segue exatamente MAPEAMENTO_CURSOS do imp_002_disciplina.py.
+O codigoOferta continua sendo gerado com a mesma função usada no imp_005,
+garantindo que as tabelas de ofertas permaneçam relacionadas.
 """
+
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from core.database import get_db_connection
 from qstione.core.transformacoes import gerar_codigo_oferta, truncar_texto
 from qstione.core.validacoes import validar_matricula, validar_codigo_curso
 from qstione.config.filtros import ANO_VIGENTE, PERIODOS_VIGENTES, SITUACAO_TURMA_VALIDA
+from qstione.importadores.imp_002_disciplina import MAPEAMENTO_CURSOS
 
 
 class ImportadorAlunosOfertas:
+    """Importa alunos das ofertas e reconstrói a tabela a cada execução."""
 
-    def __init__(self):
-        pass
+    @staticmethod
+    def _curso_unificado(curso):
+        curso = str(curso).strip() if curso is not None else ''
+        return MAPEAMENTO_CURSOS.get(curso, (curso, curso))[0]
 
-    # -------------------------------------------------------------------------
-    # Funções auxiliares para verificação de existência de tabelas/índices
-    # -------------------------------------------------------------------------
-    def _tabela_existe(self, nome_tabela: str) -> bool:
+    def _tabela_existe(self, nome_tabela):
         try:
             with get_db_connection(database_name='qstione') as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
+                return conn.execute("""
                     SELECT 1 FROM INFORMATION_SCHEMA.TABLES
                     WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'
-                """, (nome_tabela,))
-                return cursor.fetchone() is not None
-        except Exception as e:
-            print(f"  ⚠️  Erro ao verificar existência da tabela: {e}")
+                """, (nome_tabela,)).fetchone() is not None
+        except Exception:
             return False
 
-    def _indice_existe(self, nome_indice: str) -> bool:
-        try:
-            with get_db_connection(database_name='qstione') as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1 FROM sys.indexes WHERE name = ?", (nome_indice,))
-                return cursor.fetchone() is not None
-        except Exception as e:
-            print(f"  ⚠️  Erro ao verificar índice: {e}")
-            return False
-
-    def _criar_tabela(self) -> bool:
+    def _criar_tabela(self):
         if self._tabela_existe('imp_011_alunos_ofertas'):
-            print("✅ Tabela imp_011_alunos_ofertas já existe.")
             return True
-
-        print("🆕 Criando tabela imp_011_alunos_ofertas...")
-        create_sql = """
-            CREATE TABLE imp_011_alunos_ofertas (
-                codigoOferta NVARCHAR(30) NOT NULL,
-                matriculaAluno NVARCHAR(20) NOT NULL,
-                codigoCurso NVARCHAR(30) NULL,
-                data_criacao DATETIME2 DEFAULT GETDATE(),
-                data_atualizacao DATETIME2 DEFAULT GETDATE(),
-                PRIMARY KEY (codigoOferta, matriculaAluno)
-            )
-        """
         try:
             with get_db_connection(database_name='qstione') as conn:
-                conn.execute(create_sql)
+                conn.execute("""
+                    CREATE TABLE imp_011_alunos_ofertas (
+                        codigoOferta NVARCHAR(30) NOT NULL,
+                        matriculaAluno NVARCHAR(20) NOT NULL,
+                        codigoCurso NVARCHAR(30) NULL,
+                        data_criacao DATETIME2 DEFAULT GETDATE(),
+                        data_atualizacao DATETIME2 DEFAULT GETDATE(),
+                        PRIMARY KEY (codigoOferta, matriculaAluno)
+                    )
+                """)
+                conn.execute("CREATE INDEX idx_alunos_ofertas_matricula ON imp_011_alunos_ofertas(matriculaAluno)")
+                conn.execute("CREATE INDEX idx_alunos_ofertas_curso ON imp_011_alunos_ofertas(codigoCurso) WHERE codigoCurso IS NOT NULL")
                 conn.commit()
-            print("✅ Tabela criada com sucesso.")
+            print('🆕 Tabela imp_011_alunos_ofertas criada.')
+            return True
         except Exception as e:
-            print(f"❌ Erro ao criar tabela: {e}")
+            print(f'❌ Erro ao criar tabela: {e}')
             return False
 
-        # Índices opcionais
-        indices = [
-            ('idx_alunos_ofertas_matricula', "CREATE INDEX idx_alunos_ofertas_matricula ON imp_011_alunos_ofertas(matriculaAluno)"),
-            ('idx_alunos_ofertas_curso', "CREATE INDEX idx_alunos_ofertas_curso ON imp_011_alunos_ofertas(codigoCurso) WHERE codigoCurso IS NOT NULL"),
-        ]
-        for nome_idx, sql_idx in indices:
-            if not self._indice_existe(nome_idx):
-                try:
-                    with get_db_connection(database_name='qstione') as conn:
-                        conn.execute(sql_idx)
-                        conn.commit()
-                    print(f"✅ Índice {nome_idx} criado.")
-                except Exception as e:
-                    print(f"⚠️ Índice {nome_idx} não pôde ser criado: {e}")
-        return True
-
-    # -------------------------------------------------------------------------
-    # Obter dados do Lyceum
-    # -------------------------------------------------------------------------
     def obter_dados_lyceum(self):
+        periodos = ','.join('?' for _ in PERIODOS_VIGENTES)
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            periodos_placeholders = ','.join(['?'] * len(PERIODOS_VIGENTES))
-            situacao = SITUACAO_TURMA_VALIDA if 'SITUACAO_TURMA_VALIDA' in locals() else 'aberta'
-
-            query = f"""
-                SELECT
-                    m.aluno,
-                    m.ano,
-                    m.semestre,
-                    m.turma,
-                    m.disciplina,
-                    a.curso
+            return conn.execute(f"""
+                SELECT DISTINCT
+                    m.aluno, m.ano, m.semestre, m.turma, m.disciplina, a.curso
                 FROM LY_MATRICULA m
                 INNER JOIN LY_TURMA t
-                    ON m.ano = t.ano
-                    AND m.semestre = t.semestre
-                    AND m.turma = t.turma
-                    AND m.disciplina = t.disciplina
-                INNER JOIN LY_ALUNO a
-                    ON m.aluno = a.aluno
+                    ON m.ano = t.ano AND m.semestre = t.semestre
+                   AND m.turma = t.turma AND m.disciplina = t.disciplina
+                INNER JOIN LY_ALUNO a ON m.aluno = a.aluno
                 WHERE m.ano = ?
-                  AND m.semestre IN ({periodos_placeholders})
+                  AND m.semestre IN ({periodos})
                   AND t.sit_turma = ?
                 ORDER BY m.aluno, m.ano, m.semestre, m.turma, m.disciplina
-            """
-            params = [ANO_VIGENTE] + PERIODOS_VIGENTES + [situacao]
-            cursor.execute(query, params)
-            return cursor.fetchall()
+            """, [ANO_VIGENTE, *PERIODOS_VIGENTES, SITUACAO_TURMA_VALIDA]).fetchall()
 
-    # -------------------------------------------------------------------------
-    # Transformar dados
-    # -------------------------------------------------------------------------
     def transformar_dados(self, dados_lyceum):
-        dados_transformados = []
-        for row in dados_lyceum:
-            aluno, ano, semestre, turma, disciplina, curso = row
-
+        unicos = {}
+        for aluno, ano, semestre, turma, disciplina, curso in dados_lyceum:
             if not validar_matricula(aluno):
-                print(f"  ⚠️  Matrícula inválida: {aluno}")
                 continue
-            if curso and not validar_codigo_curso(curso):
-                print(f"  ⚠️  Código de curso inválido: {curso} para aluno {aluno}")
+            curso_unificado = self._curso_unificado(curso)
+            if curso_unificado and not validar_codigo_curso(curso_unificado):
+                print(f'⚠️ Código de curso inválido: {curso} -> {curso_unificado}')
                 continue
-
-            codigo_oferta = gerar_codigo_oferta(disciplina, turma, ano, semestre)
-            codigo_oferta = truncar_texto(codigo_oferta, 30)
-            matricula_aluno = truncar_texto(aluno, 20)
-
-            dados_transformados.append({
+            codigo_oferta = truncar_texto(gerar_codigo_oferta(disciplina, turma, ano, semestre), 30)
+            matricula = truncar_texto(aluno, 20)
+            unicos[(codigo_oferta, matricula)] = {
                 'codigoOferta': codigo_oferta,
-                'matriculaAluno': matricula_aluno,
-                'codigoCurso': truncar_texto(curso, 30) if curso else None
-            })
+                'matriculaAluno': matricula,
+                'codigoCurso': truncar_texto(curso_unificado, 30) if curso_unificado else None,
+            }
+        return list(unicos.values())
 
-        return dados_transformados
-
-    # -------------------------------------------------------------------------
-    # Importar para Qstione (MERGE)
-    # -------------------------------------------------------------------------
     def importar_para_qstione(self, dados_transformados):
         if not self._criar_tabela():
-            print("❌ Não foi possível criar/verificar a tabela. Abortando importação.")
-            return {
-                'total_inseridos': 0,
-                'total_atualizados': 0,
-                'total_erros': len(dados_transformados),
-                'total_processados': len(dados_transformados)
-            }
+            return {'total_inseridos': 0, 'total_atualizados': 0, 'total_erros': len(dados_transformados), 'total_processados': len(dados_transformados)}
+        inseridos = erros = 0
+        try:
+            with get_db_connection(database_name='qstione') as conn:
+                conn.execute('DELETE FROM imp_011_alunos_ofertas')
+                cursor = conn.cursor()
+                for reg in dados_transformados:
+                    try:
+                        cursor.execute("""
+                            INSERT INTO imp_011_alunos_ofertas
+                            (codigoOferta, matriculaAluno, codigoCurso, data_criacao, data_atualizacao)
+                            VALUES (?, ?, ?, GETDATE(), GETDATE())
+                        """, (reg['codigoOferta'], reg['matriculaAluno'], reg['codigoCurso']))
+                        inseridos += 1
+                    except Exception as e:
+                        erros += 1
+                        print(f"✗ {reg['codigoOferta']} - {reg['matriculaAluno']}: {e}")
+                conn.commit()
+        except Exception as e:
+            print(f'❌ Erro durante reconstrução: {e}')
+            return {'total_inseridos': 0, 'total_atualizados': 0, 'total_erros': len(dados_transformados), 'total_processados': len(dados_transformados)}
+        return {'total_inseridos': inseridos, 'total_atualizados': 0, 'total_erros': erros, 'total_processados': len(dados_transformados)}
 
-        merge_sql = """
-            MERGE INTO imp_011_alunos_ofertas AS target
-            USING (VALUES (?, ?, ?)) AS source (codigoOferta, matriculaAluno, codigoCurso)
-            ON target.codigoOferta = source.codigoOferta
-               AND target.matriculaAluno = source.matriculaAluno
-            WHEN MATCHED THEN
-                UPDATE SET
-                    codigoCurso = source.codigoCurso,
-                    data_atualizacao = GETDATE()
-            WHEN NOT MATCHED THEN
-                INSERT (codigoOferta, matriculaAluno, codigoCurso, data_criacao, data_atualizacao)
-                VALUES (source.codigoOferta, source.matriculaAluno, source.codigoCurso, GETDATE(), GETDATE());
-        """
-
-        total_inseridos = 0
-        total_atualizados = 0
-        total_erros = 0
-
-        with get_db_connection(database_name='qstione') as conn:
-            cursor = conn.cursor()
-            for reg in dados_transformados:
-                try:
-                    cursor.execute("""
-                        SELECT 1 FROM imp_011_alunos_ofertas
-                        WHERE codigoOferta = ? AND matriculaAluno = ?
-                    """, (reg['codigoOferta'], reg['matriculaAluno']))
-                    existe = cursor.fetchone()
-
-                    cursor.execute(merge_sql, (
-                        reg['codigoOferta'],
-                        reg['matriculaAluno'],
-                        reg['codigoCurso']
-                    ))
-
-                    if existe:
-                        total_atualizados += 1
-                    else:
-                        total_inseridos += 1
-                except Exception as e:
-                    total_erros += 1
-                    print(f"  ✗ Erro ao importar {reg['codigoOferta']} - {reg['matriculaAluno']}: {e}")
-
-            conn.commit()
-
-        return {
-            'total_inseridos': total_inseridos,
-            'total_atualizados': total_atualizados,
-            'total_erros': total_erros,
-            'total_processados': len(dados_transformados)
-        }
-
-    # -------------------------------------------------------------------------
-    # Execução principal
-    # -------------------------------------------------------------------------
     def executar_importacao(self):
-        print("=" * 70)
-        print("IMPORTAÇÃO: imp_011_alunos_ofertas")
-        print("=" * 70)
-
-        dados_lyceum = self.obter_dados_lyceum()
-        print(f"📊 Registros encontrados no Lyceum: {len(dados_lyceum)}")
-
-        print("🔄 Transformando dados...")
-        dados_transformados = self.transformar_dados(dados_lyceum)
-        print(f"✅ Registros válidos para importação: {len(dados_transformados)}")
-
-        print("💾 Importando para banco Qstione...")
-        resultado = self.importar_para_qstione(dados_transformados)
-
-        print(f"\n📈 RESULTADO DA IMPORTAÇÃO:")
-        print(f"  ✓ Inseridos: {resultado['total_inseridos']}")
-        print(f"  ↻ Atualizados: {resultado['total_atualizados']}")
-        print(f"  ✗ Erros: {resultado['total_erros']}")
-        print(f"  📋 Total processados: {resultado['total_processados']}")
-
-        return dados_transformados
+        print('=' * 70)
+        print('IMPORTAÇÃO: imp_011_alunos_ofertas')
+        print('=' * 70)
+        dados = self.obter_dados_lyceum()
+        print(f'📊 Registros encontrados: {len(dados)}')
+        transformados = self.transformar_dados(dados)
+        print(f'✅ Registros únicos: {len(transformados)}')
+        resultado = self.importar_para_qstione(transformados)
+        print(f"📈 Inseridos: {resultado['total_inseridos']} | Erros: {resultado['total_erros']}")
+        return transformados
 
 
-if __name__ == "__main__":
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    importador = ImportadorAlunosOfertas()
-    importador.executar_importacao()
+if __name__ == '__main__':
+    ImportadorAlunosOfertas().executar_importacao()
