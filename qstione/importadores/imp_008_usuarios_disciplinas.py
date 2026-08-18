@@ -2,10 +2,9 @@
 qstione/importadores/imp_008_usuarios_disciplinas.py
 Importador independente de usuários das disciplinas.
 
-A identificação da disciplina agora é calculada por disciplina + curso
-usando exatamente MAPEAMENTO_CURSOS e gerar_codigo_disciplina_curso do
-imp_002_disciplina.py. Isso evita o erro anterior de escolher um único
-codigoDisciplina para uma disciplina que existe em vários cursos.
+A identificação da disciplina é calculada por disciplina + curso usando
+exatamente MAPEAMENTO_CURSOS e gerar_codigo_disciplina_curso do imp_002.
+O e-mail de docentes é sempre obtido de LY_DOCENTE.mailbox.
 """
 
 import os
@@ -107,11 +106,9 @@ class ImportadorUsuariosDisciplinas:
         return emails
 
     def obter_dados_lyceum(self):
-        periodos_sql = ','.join('?' for _ in PERIODOS_VIGENTES)
         faculdades_sql = ','.join('?' for _ in FACULDADES_INCLUIDAS)
         periodo_principal = PERIODOS_VIGENTES[0]
 
-        # Docentes: cada combinação disciplina/curso/e-mail é preservada.
         with get_db_connection() as conn:
             tem_curso_turma = conn.execute("""
                 SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
@@ -120,7 +117,7 @@ class ImportadorUsuariosDisciplinas:
             curso_expr = 't.curso' if tem_curso_turma else 'g.curso'
             grade_join = '' if tem_curso_turma else 'INNER JOIN LY_GRADE g ON g.disciplina = td.disciplina'
             docentes = conn.execute(f"""
-                SELECT DISTINCT td.disciplina, {curso_expr} AS curso, d.email
+                SELECT DISTINCT td.disciplina, {curso_expr} AS curso, d.mailbox
                 FROM LY_TURMA_DOCENTE td
                 INNER JOIN LY_DISCIPLINA dsc ON dsc.disciplina = td.disciplina
                 INNER JOIN LY_DOCENTE d ON d.num_func = td.num_func
@@ -128,10 +125,9 @@ class ImportadorUsuariosDisciplinas:
                 {grade_join}
                 WHERE td.ano = ? AND td.periodo = ?
                   AND dsc.faculdade IN ({faculdades_sql}) AND d.ativo = 'S'
-                  AND d.email IS NOT NULL AND d.email != ''
+                  AND d.mailbox IS NOT NULL AND d.mailbox != ''
             """, [ANO_VIGENTE, periodo_principal, *FACULDADES_INCLUIDAS]).fetchall()
 
-            # NDE: disciplinas e todos os cursos nos quais elas aparecem.
             grade = conn.execute(f"""
                 SELECT DISTINCT td.disciplina, g.curso
                 FROM LY_TURMA_DOCENTE td
