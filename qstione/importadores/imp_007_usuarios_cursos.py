@@ -4,12 +4,12 @@ Importador independente para imp_007_usuarios_cursos.
 
 O código de curso segue exatamente o mapeamento utilizado por
 imp_002_disciplina.py. A tabela destino é limpa antes de cada carga.
+O e-mail do docente é sempre obtido de LY_DOCENTE.mailbox.
 """
 
 import os
 import sys
 
-# Permite executar diretamente pelo Play do VS Code, independentemente do cwd.
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
@@ -74,7 +74,6 @@ class ImportadorUsuariosCursos:
 
     @staticmethod
     def _curso_unificado(curso):
-        """Aplica exatamente MAPEAMENTO_CURSOS do imp_002_disciplina.py."""
         curso = str(curso).strip() if curso is not None else ''
         if curso in MAPEAMENTO_CURSOS:
             return MAPEAMENTO_CURSOS[curso][0]
@@ -95,7 +94,7 @@ class ImportadorUsuariosCursos:
         periodo_principal = PERIODOS_VIGENTES[0]
         with get_db_connection() as conn:
             rows = conn.execute("""
-                SELECT DISTINCT td.num_func, d.email, g.curso
+                SELECT DISTINCT td.num_func, d.mailbox, g.curso
                 FROM LY_TURMA_DOCENTE td
                 INNER JOIN LY_GRADE g ON g.disciplina = td.disciplina
                 INNER JOIN LY_DOCENTE d ON d.num_func = td.num_func
@@ -134,7 +133,6 @@ class ImportadorUsuariosCursos:
         inseridos = erros = 0
         try:
             with get_db_connection(database_name='qstione') as conn:
-                # Reconstrução completa: só limpa depois que a nova carga foi preparada.
                 conn.execute("DELETE FROM imp_007_usuarios_cursos")
                 cursor = conn.cursor()
                 for reg in dados_transformados:
