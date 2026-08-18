@@ -1,535 +1,255 @@
 """
 qstione/importadores/imp_005_ofertas.py
-Importador para tabela imp_005_ofertas
-Adaptado para SQL Server com alinhamento ao código de disciplina do imp_002
+Importador independente de ofertas.
+
+A regra de curso e de codigoDisciplina é a mesma do imp_002_disciplina.py:
+MAPEAMENTO_CURSOS -> curso unificado + nome do curso unificado ->
+gerar_codigo_disciplina_curso().
 """
 
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 from core.database import get_db_connection
-from qstione.config.filtros import (
-    ANO_VIGENTE,
-    PERIODOS_VIGENTES,
-    FACULDADES_INCLUIDAS,
-    AREAS_CONHECIMENTO_INCLUIDAS,
-    SITUACAO_TURMA_VALIDA
-)
-from qstione.core.transformacoes import (
-    gerar_codigo_oferta,
-    gerar_codigo_tipo_oferta,
-    mapear_turno,
-    valor_fixo_2026_2,
-    valor_fixo_vazio,
-    truncar_texto
-)
-from qstione.core.validacoes import (
-    validar_codigo_disciplina,
-    validar_nome_disciplina
-)
+from qstione.config.filtros import ANO_VIGENTE, PERIODOS_VIGENTES, FACULDADES_INCLUIDAS, AREAS_CONHECIMENTO_INCLUIDAS, SITUACAO_TURMA_VALIDA
+from qstione.core.transformacoes import gerar_codigo_oferta, gerar_codigo_tipo_oferta, gerar_codigo_disciplina_curso, mapear_turno, valor_fixo_2026_2, valor_fixo_vazio, truncar_texto
+from qstione.core.validacoes import validar_codigo_disciplina, validar_nome_disciplina
+from qstione.importadores.imp_002_disciplina import MAPEAMENTO_CURSOS
 
 
 class ImportadorOfertas:
+    """Importa ofertas preservando a mesma identificação de disciplinas do imp_002."""
 
-    def __init__(self):
-        pass
+    @staticmethod
+    def _normalizar_curso(curso, nome_curso=None):
+        curso = str(curso).strip() if curso is not None else ''
+        if curso in MAPEAMENTO_CURSOS:
+            return MAPEAMENTO_CURSOS[curso][0], MAPEAMENTO_CURSOS[curso][1]
+        return curso, (str(nome_curso).strip() if nome_curso else curso)
 
-    # -------------------------------------------------------------------------
-    # Funções auxiliares para verificação de existência de tabelas/índices
-    # -------------------------------------------------------------------------
-    def _tabela_existe(self, nome_tabela: str) -> bool:
+    def _tabela_existe(self):
         try:
             with get_db_connection(database_name='qstione') as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
+                return conn.execute("""
                     SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-                    WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'
-                """, (nome_tabela,))
-                return cursor.fetchone() is not None
-        except Exception as e:
-            print(f"  ⚠️  Erro ao verificar existência da tabela: {e}")
-            return False
-
-    def _indice_existe(self, nome_indice: str) -> bool:
-        try:
-            with get_db_connection(database_name='qstione') as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1 FROM sys.indexes WHERE name = ?", (nome_indice,))
-                return cursor.fetchone() is not None
-        except Exception as e:
-            print(f"  ⚠️  Erro ao verificar índice: {e}")
-            return False
-
-    def _criar_tabela(self):
-        if self._tabela_existe('imp_005_ofertas'):
-            try:
-                with get_db_connection(database_name='qstione') as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-                        WHERE TABLE_NAME = 'imp_005_ofertas'
-                          AND COLUMN_NAME IN ('data_criacao', 'data_atualizacao')
-                    """)
-                    colunas = [row[0] for row in cursor.fetchall()]
-                    if 'data_criacao' in colunas and 'data_atualizacao' in colunas:
-                        print("✅ Tabela imp_005_ofertas já existe com estrutura correta.")
-                        return
-                    else:
-                        print("⚠️  Colunas ausentes. Recriando tabela...")
-                        cursor.execute("DROP TABLE imp_005_ofertas")
-                        conn.commit()
-            except Exception as e:
-                print(f"⚠️  Erro ao verificar colunas: {e}. Recriando tabela...")
-                with get_db_connection(database_name='qstione') as conn:
-                    conn.execute("DROP TABLE IF EXISTS imp_005_ofertas")
-                    conn.commit()
-
-        print("🆕 Criando tabela imp_005_ofertas...")
-        create_sql = """
-            CREATE TABLE imp_005_ofertas (
-                codigoOferta NVARCHAR(30) NOT NULL,
-                nomeOferta NVARCHAR(100) NOT NULL,
-                codigoDisciplina NVARCHAR(30) NOT NULL,
-                semestreOferta NVARCHAR(6) NOT NULL,
-                codigoTipoOferta NVARCHAR(3) NOT NULL,
-                codigoOfertaOrigem NVARCHAR(30) NULL,
-                turno NVARCHAR(1) NULL,
-                codigoIdentificacaoAVA NVARCHAR(100) NULL,
-                data_criacao DATETIME2 DEFAULT GETDATE(),
-                data_atualizacao DATETIME2 DEFAULT GETDATE(),
-                PRIMARY KEY (codigoOferta)
-            )
-        """
-        try:
-            with get_db_connection(database_name='qstione') as conn:
-                conn.execute(create_sql)
-                conn.commit()
-            print("✅ Tabela criada.")
-        except Exception as e:
-            print(f"❌ Erro ao criar tabela: {e}")
-            return
-
-        indices = [
-            ('idx_ofertas_disciplina', "CREATE INDEX idx_ofertas_disciplina ON imp_005_ofertas(codigoDisciplina)"),
-            ('idx_ofertas_tipo', "CREATE INDEX idx_ofertas_tipo ON imp_005_ofertas(codigoTipoOferta)")
-        ]
-        for nome_idx, sql_idx in indices:
-            if not self._indice_existe(nome_idx):
-                try:
-                    with get_db_connection(database_name='qstione') as conn:
-                        conn.execute(sql_idx)
-                        conn.commit()
-                    print(f"✅ Índice {nome_idx} criado.")
-                except Exception as e:
-                    print(f"⚠️ Índice {nome_idx} não pôde ser criado: {e}")
-            else:
-                print(f"✅ Índice {nome_idx} já existe.")
-
-    # -------------------------------------------------------------------------
-    # Funções para obter metadados das tabelas do Lyceum (INFORMATION_SCHEMA)
-    # -------------------------------------------------------------------------
-    def _coluna_existe(self, tabela: str, coluna: str) -> bool:
-        try:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
-                    WHERE TABLE_NAME = ? AND COLUMN_NAME = ?
-                """, (tabela, coluna))
-                return cursor.fetchone() is not None
+                    WHERE TABLE_NAME = 'imp_005_ofertas' AND TABLE_TYPE = 'BASE TABLE'
+                """).fetchone() is not None
         except Exception:
             return False
 
-    # -------------------------------------------------------------------------
-    # Obter mapeamento disciplina -> codigoDisciplina da tabela imp_002_disciplina
-    # -------------------------------------------------------------------------
-    def _obter_codigos_disciplina(self):
-        """
-        Consulta a tabela imp_002_disciplina no banco Qstione e retorna um dicionário
-        com disciplina original -> codigoDisciplina (o código padronizado).
-        Considera que cada disciplina tem um único registro (após agregação).
-        """
-        codigos = {}
+    def _indice_existe(self, nome):
         try:
             with get_db_connection(database_name='qstione') as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT codigoDisciplina FROM imp_002_disciplina
+                return conn.execute('SELECT 1 FROM sys.indexes WHERE name = ?', (nome,)).fetchone() is not None
+        except Exception:
+            return False
+
+    def _criar_tabela(self):
+        if not self._tabela_existe():
+            with get_db_connection(database_name='qstione') as conn:
+                conn.execute("""
+                    CREATE TABLE imp_005_ofertas (
+                        codigoOferta NVARCHAR(30) NOT NULL,
+                        nomeOferta NVARCHAR(100) NOT NULL,
+                        codigoDisciplina NVARCHAR(30) NOT NULL,
+                        semestreOferta NVARCHAR(6) NOT NULL,
+                        codigoTipoOferta NVARCHAR(3) NOT NULL,
+                        codigoOfertaOrigem NVARCHAR(30) NULL,
+                        turno NVARCHAR(1) NULL,
+                        codigoIdentificacaoAVA NVARCHAR(100) NULL,
+                        data_criacao DATETIME2 DEFAULT GETDATE(),
+                        data_atualizacao DATETIME2 DEFAULT GETDATE(),
+                        PRIMARY KEY (codigoOferta)
+                    )
                 """)
-                for row in cursor.fetchall():
-                    codigo_completo = row[0]
-                    # Extrai a parte antes do primeiro '-'
-                    if '-' in codigo_completo:
-                        original = codigo_completo.split('-')[0]
-                        codigos[original] = codigo_completo
-                    else:
-                        # Se não tiver '-', assume que é o próprio código
-                        codigos[codigo_completo] = codigo_completo
-        except Exception as e:
-            print(f"  ⚠️  Erro ao consultar imp_002_disciplina: {e}")
-        return codigos
+                conn.commit()
+                print('🆕 Tabela imp_005_ofertas criada.')
 
-    # -------------------------------------------------------------------------
-    # Obter dados do Lyceum com filtros centralizados
-    # -------------------------------------------------------------------------
+        for nome, sql in [
+            ('idx_ofertas_disciplina', 'CREATE INDEX idx_ofertas_disciplina ON imp_005_ofertas(codigoDisciplina)'),
+            ('idx_ofertas_tipo', 'CREATE INDEX idx_ofertas_tipo ON imp_005_ofertas(codigoTipoOferta)'),
+        ]:
+            if not self._indice_existe(nome):
+                try:
+                    with get_db_connection(database_name='qstione') as conn:
+                        conn.execute(sql)
+                        conn.commit()
+                except Exception as e:
+                    print(f'⚠️ Índice {nome}: {e}')
+
+    def _coluna_existe(self, tabela, coluna):
+        try:
+            with get_db_connection() as conn:
+                return conn.execute("""
+                    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_NAME = ? AND COLUMN_NAME = ?
+                """, (tabela, coluna)).fetchone() is not None
+        except Exception:
+            return False
+
     def obter_dados_lyceum(self):
+        areas = [a for a in AREAS_CONHECIMENTO_INCLUIDAS if a is not None]
+        areas_sql = ','.join('?' for _ in areas)
+        periodos_sql = ','.join('?' for _ in PERIODOS_VIGENTES)
+        faculdades_sql = ','.join('?' for _ in FACULDADES_INCLUIDAS)
+
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-
-            tem_curso_na_turma = self._coluna_existe('LY_TURMA', 'curso')
-            tem_curso_na_disciplina = self._coluna_existe('LY_DISCIPLINA', 'curso')
-
-            areas_validas = [a for a in AREAS_CONHECIMENTO_INCLUIDAS if a is not None]
-            placeholders_areas = ','.join(['?'] * len(areas_validas))
-
-            if tem_curso_na_turma:
-                query = f"""
-                    SELECT
-                        t.disciplina,
-                        t.turma,
-                        t.ano,
-                        t.semestre,
-                        t.turno,
-                        d.nome_compl,
-                        t.curso as codigo_curso,
-                        c.nome as nome_curso,
-                        d.area_conhecimento
-                    FROM LY_TURMA t
-                    INNER JOIN LY_DISCIPLINA d
-                        ON d.disciplina = t.disciplina
-                    INNER JOIN LY_CURSO c
-                        ON c.curso = t.curso
-                    WHERE t.ano = ?
-                      AND t.semestre IN ({','.join(['?'] * len(PERIODOS_VIGENTES))})
-                      AND t.sit_turma = ?
-                      AND d.faculdade IN ({','.join(['?'] * len(FACULDADES_INCLUIDAS))})
-                      AND (d.area_conhecimento IN ({placeholders_areas})
-                           OR d.area_conhecimento IS NULL)
-                    ORDER BY t.disciplina, t.turma
-                """
-                params = [ANO_VIGENTE] + PERIODOS_VIGENTES + [SITUACAO_TURMA_VALIDA] + FACULDADES_INCLUIDAS + areas_validas
-
-            elif tem_curso_na_disciplina:
-                query = f"""
-                    SELECT
-                        t.disciplina,
-                        t.turma,
-                        t.ano,
-                        t.semestre,
-                        t.turno,
-                        d.nome_compl,
-                        d.curso as codigo_curso,
-                        c.nome as nome_curso,
-                        d.area_conhecimento
-                    FROM LY_TURMA t
-                    INNER JOIN LY_DISCIPLINA d
-                        ON d.disciplina = t.disciplina
-                    INNER JOIN LY_CURSO c
-                        ON c.curso = d.curso
-                    WHERE t.ano = ?
-                      AND t.semestre IN ({','.join(['?'] * len(PERIODOS_VIGENTES))})
-                      AND t.sit_turma = ?
-                      AND d.faculdade IN ({','.join(['?'] * len(FACULDADES_INCLUIDAS))})
-                      AND (d.area_conhecimento IN ({placeholders_areas})
-                           OR d.area_conhecimento IS NULL)
-                    ORDER BY t.disciplina, t.turma
-                """
-                params = [ANO_VIGENTE] + PERIODOS_VIGENTES + [SITUACAO_TURMA_VALIDA] + FACULDADES_INCLUIDAS + areas_validas
-
+            if self._coluna_existe('LY_TURMA', 'curso'):
+                curso_select = 't.curso'
+                curso_join = 'c.curso = t.curso'
+            elif self._coluna_existe('LY_DISCIPLINA', 'curso'):
+                curso_select = 'd.curso'
+                curso_join = 'c.curso = d.curso'
             else:
-                query = f"""
-                    SELECT
-                        t.disciplina,
-                        t.turma,
-                        t.ano,
-                        t.semestre,
-                        t.turno,
-                        d.nome_compl,
-                        g.curso as codigo_curso,
-                        c.nome as nome_curso,
-                        d.area_conhecimento
-                    FROM LY_TURMA t
-                    INNER JOIN LY_DISCIPLINA d
-                        ON d.disciplina = t.disciplina
-                    INNER JOIN LY_GRADE g
-                        ON g.disciplina = t.disciplina
-                    INNER JOIN LY_CURSO c
-                        ON c.curso = g.curso
-                    WHERE t.ano = ?
-                      AND t.semestre IN ({','.join(['?'] * len(PERIODOS_VIGENTES))})
-                      AND t.sit_turma = ?
-                      AND d.faculdade IN ({','.join(['?'] * len(FACULDADES_INCLUIDAS))})
-                      AND (d.area_conhecimento IN ({placeholders_areas})
-                           OR d.area_conhecimento IS NULL)
-                    GROUP BY t.disciplina, t.turma, t.ano, t.semestre, t.turno,
-                             d.nome_compl, g.curso, c.nome, d.area_conhecimento
-                    ORDER BY t.disciplina, t.turma
-                """
-                params = [ANO_VIGENTE] + PERIODOS_VIGENTES + [SITUACAO_TURMA_VALIDA] + FACULDADES_INCLUIDAS + areas_validas
+                curso_select = 'g.curso'
+                curso_join = 'c.curso = g.curso'
 
-            cursor.execute(query, params)
-            return cursor.fetchall()
+            join_grade = '' if self._coluna_existe('LY_TURMA', 'curso') or self._coluna_existe('LY_DISCIPLINA', 'curso') else 'INNER JOIN LY_GRADE g ON g.disciplina = t.disciplina'
+            query = f"""
+                SELECT t.disciplina, t.turma, t.ano, t.semestre, t.turno,
+                       d.nome_compl, {curso_select} AS codigo_curso, c.nome AS nome_curso,
+                       d.area_conhecimento
+                FROM LY_TURMA t
+                INNER JOIN LY_DISCIPLINA d ON d.disciplina = t.disciplina
+                {join_grade}
+                INNER JOIN LY_CURSO c ON {curso_join}
+                WHERE t.ano = ?
+                  AND t.semestre IN ({periodos_sql})
+                  AND t.sit_turma = ?
+                  AND d.faculdade IN ({faculdades_sql})
+                  AND (d.area_conhecimento IN ({areas_sql}) OR d.area_conhecimento IS NULL)
+                ORDER BY t.disciplina, t.turma
+            """
+            params = [ANO_VIGENTE, *PERIODOS_VIGENTES, SITUACAO_TURMA_VALIDA, *FACULDADES_INCLUIDAS, *areas]
+            return conn.execute(query, params).fetchall()
 
-    # -------------------------------------------------------------------------
-    # Obter turmas regulares (T0) com filtros centralizados
-    # -------------------------------------------------------------------------
     def obter_turmas_regulares(self):
+        periodos_sql = ','.join('?' for _ in PERIODOS_VIGENTES)
+        faculdades_sql = ','.join('?' for _ in FACULDADES_INCLUIDAS)
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            tem_curso_na_turma = self._coluna_existe('LY_TURMA', 'curso')
-
-            if tem_curso_na_turma:
-                query = f"""
-                    SELECT
-                        t.disciplina,
-                        t.turma,
-                        t.ano,
-                        t.semestre,
-                        c.nome as nome_curso,
-                        t.curso as codigo_curso
-                    FROM LY_TURMA t
-                    INNER JOIN LY_DISCIPLINA d
-                        ON d.disciplina = t.disciplina
-                    INNER JOIN LY_CURSO c
-                        ON c.curso = t.curso
-                    WHERE t.ano = ?
-                      AND t.semestre IN ({','.join(['?'] * len(PERIODOS_VIGENTES))})
-                      AND t.sit_turma = ?
-                      AND t.turma LIKE 'T0%'
-                      AND d.faculdade IN ({','.join(['?'] * len(FACULDADES_INCLUIDAS))})
-                """
-                params = [ANO_VIGENTE] + PERIODOS_VIGENTES + [SITUACAO_TURMA_VALIDA] + FACULDADES_INCLUIDAS
+            if self._coluna_existe('LY_TURMA', 'curso'):
+                curso = 't.curso'
+                join_curso = 'c.curso = t.curso'
             else:
-                query = f"""
-                    SELECT
-                        t.disciplina,
-                        t.turma,
-                        t.ano,
-                        t.semestre,
-                        c.nome as nome_curso,
-                        g.curso as codigo_curso
-                    FROM LY_TURMA t
-                    INNER JOIN LY_DISCIPLINA d
-                        ON d.disciplina = t.disciplina
-                    INNER JOIN LY_GRADE g
-                        ON g.disciplina = t.disciplina
-                    INNER JOIN LY_CURSO c
-                        ON c.curso = g.curso
-                    WHERE t.ano = ?
-                      AND t.semestre IN ({','.join(['?'] * len(PERIODOS_VIGENTES))})
-                      AND t.sit_turma = ?
-                      AND t.turma LIKE 'T0%'
-                      AND d.faculdade IN ({','.join(['?'] * len(FACULDADES_INCLUIDAS))})
-                    GROUP BY t.disciplina, t.turma, t.ano, t.semestre, c.nome, g.curso
-                """
-                params = [ANO_VIGENTE] + PERIODOS_VIGENTES + [SITUACAO_TURMA_VALIDA] + FACULDADES_INCLUIDAS
+                curso = 'g.curso'
+                join_curso = 'c.curso = g.curso'
+            grade = '' if self._coluna_existe('LY_TURMA', 'curso') else 'INNER JOIN LY_GRADE g ON g.disciplina = t.disciplina'
+            rows = conn.execute(f"""
+                SELECT t.disciplina, t.turma, t.ano, t.semestre, {curso}
+                FROM LY_TURMA t
+                INNER JOIN LY_DISCIPLINA d ON d.disciplina = t.disciplina
+                {grade}
+                INNER JOIN LY_CURSO c ON {join_curso}
+                WHERE t.ano = ? AND t.semestre IN ({periodos_sql})
+                  AND t.sit_turma = ? AND t.turma LIKE 'T0%'
+                  AND d.faculdade IN ({faculdades_sql})
+            """, [ANO_VIGENTE, *PERIODOS_VIGENTES, SITUACAO_TURMA_VALIDA, *FACULDADES_INCLUIDAS]).fetchall()
+        result = {}
+        for disciplina, turma, ano, semestre, curso in rows:
+            result.setdefault((disciplina, ano, semestre, curso), []).append(turma)
+        return result
 
-            cursor.execute(query, params)
-            turmas_regulares = {}
-            for row in cursor.fetchall():
-                disciplina, turma, ano, semestre, nome_curso, codigo_curso = row
-                key = (disciplina, ano, semestre, codigo_curso)
-                if key not in turmas_regulares:
-                    turmas_regulares[key] = []
-                turmas_regulares[key].append(turma)
-            return turmas_regulares
-
-    # -------------------------------------------------------------------------
-    # Obter curso para disciplina (fallback)
-    # -------------------------------------------------------------------------
     def obter_curso_para_disciplina(self, disciplina):
         try:
             with get_db_connection() as conn:
-                cursor = conn.cursor()
-                query = """
-                    SELECT TOP 1
-                        g.curso,
-                        c.nome
-                    FROM LY_GRADE g
-                    INNER JOIN LY_CURSO c ON c.curso = g.curso
+                row = conn.execute("""
+                    SELECT TOP 1 g.curso, c.nome
+                    FROM LY_GRADE g INNER JOIN LY_CURSO c ON c.curso = g.curso
                     WHERE g.disciplina = ?
-                """
-                cursor.execute(query, (disciplina,))
-                row = cursor.fetchone()
-                if row:
-                    return row[0], row[1]
-                return None, None
-        except Exception as e:
-            print(f"Erro ao obter curso para disciplina {disciplina}: {e}")
+                """, (disciplina,)).fetchone()
+                return row if row else (None, None)
+        except Exception:
             return None, None
 
-    # -------------------------------------------------------------------------
-    # Transformar dados (usando mapeamento de disciplinas do imp_002)
-    # -------------------------------------------------------------------------
     def transformar_dados(self, dados_lyceum):
-        # Obter mapeamento disciplina -> codigoDisciplina padronizado
-        mapa_codigos = self._obter_codigos_disciplina()
-        if not mapa_codigos:
-            print("  ⚠️  Nenhum código de disciplina encontrado no imp_002. As ofertas serão geradas com base no curso da turma, mas podem haver divergências.")
-
         turmas_regulares = self.obter_turmas_regulares()
-        dados_transformados = []
-
+        dados = []
         for registro in dados_lyceum:
-            if len(registro) == 9:
-                disciplina, turma, ano, semestre, turno, nome_compl, codigo_curso, nome_curso, area_conhecimento = registro
-            elif len(registro) == 7:
-                disciplina, turma, ano, semestre, turno, nome_compl, area_conhecimento = registro
-                codigo_curso, nome_curso = self.obter_curso_para_disciplina(disciplina)
-            else:
-                print(f"  ⚠️  Formato de registro inválido: {registro}")
-                continue
-
-            # Validações
+            disciplina, turma, ano, semestre, turno, nome_compl, curso, nome_curso, _ = registro
             if not validar_codigo_disciplina(disciplina):
-                print(f"  ⚠️  Código da disciplina inválido: {disciplina}")
                 continue
-
             nome_disciplina = validar_nome_disciplina(nome_compl)
             if nome_disciplina is None:
                 nome_disciplina = truncar_texto(nome_compl, 100)
-                if not nome_disciplina:
-                    print(f"  ⚠️  Nome da disciplina inválido após truncagem: {nome_compl}")
-                    continue
-                print(f"  ⚠️  Nome da disciplina truncado: {nome_disciplina}")
+            if not nome_disciplina:
+                continue
 
-            # Determinar o código da disciplina padronizado
-            if disciplina in mapa_codigos:
-                codigo_disciplina_padrao = mapa_codigos[disciplina]
-            else:
-                # Fallback: gerar com base no curso da turma
-                print(f"  ⚠️  Disciplina {disciplina} não encontrada no imp_002. Gerando código com curso {codigo_curso}.")
-                from qstione.core.transformacoes import gerar_codigo_disciplina_curso
-                codigo_disciplina_padrao = gerar_codigo_disciplina_curso(disciplina, nome_curso, codigo_curso)
-                codigo_disciplina_padrao = truncar_texto(codigo_disciplina_padrao, 30)
+            curso_unificado, nome_curso_unificado = self._normalizar_curso(curso, nome_curso)
+            # Mesma composição do imp_002: disciplina original + nome do curso unificado + ID unificado.
+            codigo_disciplina = truncar_texto(
+                gerar_codigo_disciplina_curso(disciplina, nome_curso_unificado, curso_unificado), 30
+            )
 
-            # Gerar código da oferta
-            codigo_oferta = gerar_codigo_oferta(disciplina, turma, ano, semestre)
-            semestre_oferta = valor_fixo_2026_2(None)
-            codigo_tipo_oferta = gerar_codigo_tipo_oferta(turma)
-            turno_oferta = mapear_turno(turno)
-            codigo_ava = valor_fixo_vazio(None)
+            codigo_oferta = truncar_texto(gerar_codigo_oferta(disciplina, turma, ano, semestre), 30)
+            tipo = truncar_texto(gerar_codigo_tipo_oferta(turma), 3)
+            origem = ''
+            if tipo in ('REC', 'REP'):
+                for turma_regular in turmas_regulares.get((disciplina, ano, semestre, curso), []):
+                    origem = gerar_codigo_oferta(disciplina, turma_regular, ano, semestre)
+                    break
 
-            # Código de origem para REC/REP
-            codigo_oferta_origem = ''
-            if codigo_tipo_oferta in ['REC', 'REP']:
-                key = (disciplina, ano, semestre, codigo_curso)
-                if key in turmas_regulares and turmas_regulares[key]:
-                    turma_regular = turmas_regulares[key][0]
-                    codigo_oferta_origem = gerar_codigo_oferta(disciplina, turma_regular, ano, semestre)
-
-            dados_transformados.append({
-                'codigoOferta': truncar_texto(codigo_oferta, 30),
+            dados.append({
+                'codigoOferta': codigo_oferta,
                 'nomeOferta': truncar_texto(turma, 100),
-                'codigoDisciplina': codigo_disciplina_padrao,
-                'semestreOferta': truncar_texto(semestre_oferta, 6),
-                'codigoTipoOferta': truncar_texto(codigo_tipo_oferta, 3),
-                'codigoOfertaOrigem': truncar_texto(codigo_oferta_origem, 30),
-                'turno': truncar_texto(turno_oferta, 1),
-                'codigoIdentificacaoAVA': truncar_texto(codigo_ava, 100)
+                'codigoDisciplina': codigo_disciplina,
+                'semestreOferta': truncar_texto(valor_fixo_2026_2(None), 6),
+                'codigoTipoOferta': tipo,
+                'codigoOfertaOrigem': truncar_texto(origem, 30),
+                'turno': truncar_texto(mapear_turno(turno), 1),
+                'codigoIdentificacaoAVA': truncar_texto(valor_fixo_vazio(None), 100),
             })
+        # A PK é codigoOferta; em caso de duplicidade, conserva o primeiro registro.
+        unicos = {}
+        for reg in dados:
+            unicos[reg['codigoOferta']] = reg
+        return list(unicos.values())
 
-        return dados_transformados
-
-    # -------------------------------------------------------------------------
-    # Importar para Qstione (MERGE)
-    # -------------------------------------------------------------------------
     def importar_para_qstione(self, dados_transformados):
         self._criar_tabela()
+        inseridos = erros = 0
+        try:
+            with get_db_connection(database_name='qstione') as conn:
+                conn.execute('DELETE FROM imp_005_ofertas')
+                cursor = conn.cursor()
+                for reg in dados_transformados:
+                    try:
+                        cursor.execute("""
+                            INSERT INTO imp_005_ofertas
+                            (codigoOferta, nomeOferta, codigoDisciplina, semestreOferta,
+                             codigoTipoOferta, codigoOfertaOrigem, turno, codigoIdentificacaoAVA,
+                             data_criacao, data_atualizacao)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
+                        """, (
+                            reg['codigoOferta'], reg['nomeOferta'], reg['codigoDisciplina'], reg['semestreOferta'],
+                            reg['codigoTipoOferta'], reg['codigoOfertaOrigem'] or None, reg['turno'] or None,
+                            reg['codigoIdentificacaoAVA'] or None
+                        ))
+                        inseridos += 1
+                    except Exception as e:
+                        erros += 1
+                        print(f"✗ {reg['codigoOferta']}: {e}")
+                conn.commit()
+        except Exception as e:
+            print(f'❌ Erro durante reconstrução: {e}')
+            return {'total_inseridos': 0, 'total_atualizados': 0, 'total_erros': len(dados_transformados), 'total_processados': len(dados_transformados)}
+        return {'total_inseridos': inseridos, 'total_atualizados': 0, 'total_erros': erros, 'total_processados': len(dados_transformados)}
 
-        merge_sql = """
-            MERGE INTO imp_005_ofertas AS target
-            USING (VALUES (?, ?, ?, ?, ?, ?, ?, ?)) AS source
-                (codigoOferta, nomeOferta, codigoDisciplina, semestreOferta,
-                 codigoTipoOferta, codigoOfertaOrigem, turno, codigoIdentificacaoAVA)
-            ON target.codigoOferta = source.codigoOferta
-            WHEN MATCHED THEN
-                UPDATE SET
-                    nomeOferta = source.nomeOferta,
-                    codigoDisciplina = source.codigoDisciplina,
-                    semestreOferta = source.semestreOferta,
-                    codigoTipoOferta = source.codigoTipoOferta,
-                    codigoOfertaOrigem = source.codigoOfertaOrigem,
-                    turno = source.turno,
-                    codigoIdentificacaoAVA = source.codigoIdentificacaoAVA,
-                    data_atualizacao = GETDATE()
-            WHEN NOT MATCHED THEN
-                INSERT (codigoOferta, nomeOferta, codigoDisciplina, semestreOferta,
-                        codigoTipoOferta, codigoOfertaOrigem, turno, codigoIdentificacaoAVA,
-                        data_criacao, data_atualizacao)
-                VALUES (source.codigoOferta, source.nomeOferta, source.codigoDisciplina,
-                        source.semestreOferta, source.codigoTipoOferta, source.codigoOfertaOrigem,
-                        source.turno, source.codigoIdentificacaoAVA, GETDATE(), GETDATE());
-        """
-
-        total_inseridos = 0
-        total_atualizados = 0
-        total_erros = 0
-
-        with get_db_connection(database_name='qstione') as conn:
-            cursor = conn.cursor()
-            for reg in dados_transformados:
-                try:
-                    cursor.execute("SELECT 1 FROM imp_005_ofertas WHERE codigoOferta = ?", (reg['codigoOferta'],))
-                    existe = cursor.fetchone()
-
-                    cursor.execute(merge_sql, (
-                        reg['codigoOferta'],
-                        reg['nomeOferta'],
-                        reg['codigoDisciplina'],
-                        reg['semestreOferta'],
-                        reg['codigoTipoOferta'],
-                        reg['codigoOfertaOrigem'] or None,
-                        reg['turno'] or None,
-                        reg['codigoIdentificacaoAVA'] or None
-                    ))
-
-                    if existe:
-                        total_atualizados += 1
-                    else:
-                        total_inseridos += 1
-                except Exception as e:
-                    total_erros += 1
-                    print(f"  ✗  Erro ao importar {reg['codigoOferta']}: {e}")
-
-            conn.commit()
-
-        return {
-            'total_inseridos': total_inseridos,
-            'total_atualizados': total_atualizados,
-            'total_erros': total_erros,
-            'total_processados': len(dados_transformados)
-        }
-
-    # -------------------------------------------------------------------------
-    # Execução principal
-    # -------------------------------------------------------------------------
     def executar_importacao(self):
-        print("=" * 70)
-        print("IMPORTAÇÃO: imp_005_ofertas")
-        print("=" * 70)
-
-        # 1. Obter dados do Lyceum
-        dados_lyceum = self.obter_dados_lyceum()
-        print(f"📊 Registros encontrados no Lyceum: {len(dados_lyceum)}")
-
-        # 2. Transformar dados
-        print("🔄 Transformando dados...")
-        dados_transformados = self.transformar_dados(dados_lyceum)
-        print(f"✅ Registros válidos para importação: {len(dados_transformados)}")
-
-        # 3. Importar para Qstione
-        print("💾 Importando para banco Qstione...")
-        resultado = self.importar_para_qstione(dados_transformados)
-
-        print(f"\n📈 RESULTADO DA IMPORTAÇÃO:")
-        print(f"  ✓ Inseridos: {resultado['total_inseridos']}")
-        print(f"  ↻ Atualizados: {resultado['total_atualizados']}")
-        print(f"  ✗ Erros: {resultado['total_erros']}")
-        print(f"  📋 Total processados: {resultado['total_processados']}")
-
-        return dados_transformados
+        print('=' * 70)
+        print('IMPORTAÇÃO: imp_005_ofertas')
+        print('=' * 70)
+        dados = self.obter_dados_lyceum()
+        print(f'📊 Registros encontrados: {len(dados)}')
+        transformados = self.transformar_dados(dados)
+        print(f'✅ Registros únicos: {len(transformados)}')
+        resultado = self.importar_para_qstione(transformados)
+        print(f"📈 Inseridos: {resultado['total_inseridos']} | Erros: {resultado['total_erros']}")
+        return transformados
 
 
-if __name__ == "__main__":
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    importador = ImportadorOfertas()
-    importador.executar_importacao()
+if __name__ == '__main__':
+    ImportadorOfertas().executar_importacao()
