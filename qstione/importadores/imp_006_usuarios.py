@@ -18,9 +18,6 @@ class ImportadorUsuarios:
     def __init__(self):
         pass
 
-    # -------------------------------------------------------------------------
-    # Funções auxiliares para verificação de existência de tabelas/índices
-    # -------------------------------------------------------------------------
     def _tabela_existe(self, nome_tabela: str) -> bool:
         try:
             with get_db_connection(database_name='qstione') as conn:
@@ -46,7 +43,6 @@ class ImportadorUsuarios:
 
     def _criar_tabela(self):
         if self._tabela_existe('imp_006_usuarios'):
-            # Verifica se as colunas obrigatórias existem
             try:
                 with get_db_connection(database_name='qstione') as conn:
                     cursor = conn.cursor()
@@ -90,7 +86,6 @@ class ImportadorUsuarios:
             print(f"❌ Erro ao criar tabela: {e}")
             return
 
-        # Índice
         if not self._indice_existe('idx_usuarios_email'):
             try:
                 with get_db_connection(database_name='qstione') as conn:
@@ -102,16 +97,13 @@ class ImportadorUsuarios:
         else:
             print("✅ Índice idx_usuarios_email já existe.")
 
-    # -------------------------------------------------------------------------
-    # Obter dados do Lyceum (agora com agregação correta para SQL Server)
-    # -------------------------------------------------------------------------
     def obter_dados_lyceum(self):
         with get_db_connection() as conn:
             cursor = conn.cursor()
             query = """
                 SELECT
                     MAX(d.matricula) as matricula,
-                    MAX(d.email) as email,
+                    MAX(d.mailbox) as email,
                     MAX(COALESCE(d.nome_social, d.nome_compl)) as nome_completo,
                     d.cpf
                 FROM LY_DOCENTE d
@@ -122,16 +114,12 @@ class ImportadorUsuarios:
             cursor.execute(query)
             return cursor.fetchall()
 
-    # -------------------------------------------------------------------------
-    # Transformar dados
-    # -------------------------------------------------------------------------
     def transformar_dados(self, dados_lyceum):
         dados_transformados = []
 
         for registro in dados_lyceum:
-            matricula, email, nome, cpf = registro  # cpf não é usado, mas mantido para compatibilidade
+            matricula, email, nome, cpf = registro
 
-            # Validações
             if not validar_matricula(matricula):
                 print(f"  ⚠️  Matrícula inválida: {matricula}")
                 continue
@@ -144,7 +132,6 @@ class ImportadorUsuarios:
                 print(f"  ⚠️  Nome inválido: {nome}")
                 continue
 
-            # Transformações
             email_final = converter_minusculas(email)
             codigo_usuario = extrair_usuario_email(email)
             nome_final = truncar_texto(nome, 64)
@@ -158,9 +145,6 @@ class ImportadorUsuarios:
 
         return dados_transformados
 
-    # -------------------------------------------------------------------------
-    # Importar para Qstione (MERGE)
-    # -------------------------------------------------------------------------
     def importar_para_qstione(self, dados_transformados):
         self._criar_tabela()
 
@@ -214,24 +198,18 @@ class ImportadorUsuarios:
             'total_processados': len(dados_transformados)
         }
 
-    # -------------------------------------------------------------------------
-    # Execução principal
-    # -------------------------------------------------------------------------
     def executar_importacao(self):
         print("=" * 70)
         print("IMPORTAÇÃO: imp_006_usuarios")
         print("=" * 70)
 
-        # 1. Obter dados do Lyceum
         dados_lyceum = self.obter_dados_lyceum()
         print(f"📊 Registros encontrados no Lyceum: {len(dados_lyceum)}")
 
-        # 2. Transformar dados
         print("🔄 Transformando dados...")
         dados_transformados = self.transformar_dados(dados_lyceum)
         print(f"✅ Registros válidos para importação: {len(dados_transformados)}")
 
-        # 3. Importar para Qstione
         print("💾 Importando para banco Qstione...")
         resultado = self.importar_para_qstione(dados_transformados)
 
