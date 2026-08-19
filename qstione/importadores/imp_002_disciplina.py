@@ -3,14 +3,25 @@
 """
 Importador para imp_002_disciplina
 Fonte: LY_MATRICULA -> LY_TURMA -> LY_ALUNO -> LY_CURSO, LY_DISCIPLINA, LY_GRADE
-Filtros:
-- Ano e semestre vigentes (via filtros)
-- Alunos ativos
-- Cursos da lista fixa (CURSOS_INCLUIDOS) – tanto do aluno quanto da turma
-- Faculdades permitidas (FACULDADES_INCLUIDAS) ou curso nulo (vira '999')
-- Cursos nulos em LY_TURMA são mapeados para '999' (disciplina compartilhada)
+
+Regras de filtro (centralizadas em qstione/config/filtros.py):
+- ANO_VIGENTE / PERIODOS_VIGENTES: ano e semestre letivos vigentes
+- FACULDADES_INCLUIDAS: faculdade do CURSO (LY_CURSO.faculdade) deve estar nessa lista
+  (hoje = ['001']) quando a turma tiver um curso definido.
+- SITUACAO_TURMA_VALIDA: situação exigida em LY_TURMA.sit_turma (hoje = 'aberta')
+
+Regras de negócio:
+- O curso da disciplina/oferta é SEMPRE obtido de LY_TURMA.curso (nunca do curso do aluno).
+- Se LY_TURMA.curso for NULL (turma sem curso definido), o registro é mantido e o curso é
+  tratado como '999' (COMPARTILHADA) — essas turmas precisam continuar sendo importadas.
+- Se LY_TURMA.curso estiver preenchido, a faculdade do curso (via LY_CURSO) precisa estar
+  em FACULDADES_INCLUIDAS para o registro ser considerado.
+- LY_TURMA.sit_turma precisa ser igual a SITUACAO_TURMA_VALIDA.
+- O JOIN entre LY_MATRICULA e LY_TURMA é feito pela chave composta completa
+  (ano, semestre, turma, disciplina), evitando casamento incorreto entre turmas de
+  períodos/disciplinas diferentes que compartilhem apenas o código de 'turma'.
 - Nome da disciplina obtido de LY_DISCIPLINA.nome
-- Período obtido de LY_GRADE.serie_ideal (usando curso da turma, ou curso do aluno como fallback)
+- Período obtido de LY_GRADE.serie_ideal (usando SEMPRE o curso da turma)
 - Mapeamento unificado de cursos (códigos duplicados agrupados)
 - Código da disciplina com sufixo do nome do curso unificado
 """
@@ -35,6 +46,7 @@ from qstione.config.filtros import (
     ANO_VIGENTE,
     PERIODOS_VIGENTES,
     FACULDADES_INCLUIDAS,
+    SITUACAO_TURMA_VALIDA,
 )
 
 # =============================================================================
@@ -76,18 +88,8 @@ MAPEAMENTO_CURSOS = {
     '061': ('061', 'PUBLICIDADE E PROPAGANDA'),
     '025': ('025', 'SERVIÇO SOCIAL'),
     '019': ('019', 'SISTEMAS DE INFORMAÇÃO'),
-    '999': ('999', 'COMPARTILHADA'),  # para consistência
+    '999': ('999', 'COMPARTILHADA'),  # turmas sem curso definido em LY_TURMA
 }
-
-# Lista fixa de cursos (originais, incluindo '999')
-CURSOS_INCLUIDOS = [
-    '034', '064', '062', '009', '023', '055', '051', '010',
-    '056', '141', '031', '065', '013', '079', '016', '006',
-    '020', '097', '059', '142', '044', '139', '017', '132',
-    '126', '057', '037', '047', '060', '058', '036', '014',
-    '024', '007', '130', '128', '145', '061', '025', '019',
-    '999'
-]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -100,7 +102,6 @@ logger = logging.getLogger(__name__)
 class ImportadorDisciplinas:
 
     def __init__(self):
-        self.cursos_placeholders = ','.join(['?'] * len(CURSOS_INCLUIDOS))
         self.periodos_placeholders = ','.join(['?'] * len(PERIODOS_VIGENTES))
         self.faculdades_placeholders = ','.join(['?'] * len(FACULDADES_INCLUIDAS))
 
@@ -172,6 +173,17 @@ class ImportadorDisciplinas:
 
     # -------------------------------------------------------------------------
     # Obter dados do Lyceum com JOINs LY_DISCIPLINA e LY_GRADE
+    #
+    # Regras aplicadas:
+    #  - JOIN de LY_MATRICULA com LY_TURMA pela chave composta completa
+    #    (ano, semestre, turma, disciplina) — evita casamento incorreto entre
+    #    turmas de períodos/disciplinas diferentes.
+    #  - t.sit_turma = SITUACAO_TURMA_VALIDA (config centralizada)
+    #  - Curso sempre vindo de LY_TURMA.curso (nunca do curso do aluno).
+    #  - Se t.curso IS NULL -> mantém o registro (turma sem curso definido);
+    #    o transformar_dados() converte para '999' (COMPARTILHADA).
+    #  - Se t.curso estiver preenchido -> a faculdade do curso (LY_CURSO.faculdade)
+    #    precisa estar em FACULDADES_INCLUIDAS.
     # -------------------------------------------------------------------------
     def obter_dados_lyceum(self):
         query = f"""
@@ -179,30 +191,37 @@ class ImportadorDisciplinas:
                 t.disciplina,
                 d.nome AS nome_disciplina,
                 t.curso,
-                a.curso AS curso_aluno,
                 g.serie_ideal
             FROM LY_MATRICULA m
-            INNER JOIN LY_TURMA t ON m.turma = t.turma
-            INNER JOIN LY_ALUNO a ON a.aluno = m.aluno
-            LEFT JOIN LY_CURSO c ON c.curso = t.curso
-            LEFT JOIN LY_DISCIPLINA d ON d.disciplina = t.disciplina
-            LEFT JOIN LY_GRADE g ON g.disciplina = t.disciplina 
-                AND g.curso = COALESCE(t.curso, a.curso)
+            INNER JOIN LY_TURMA t
+                ON m.ano        = t.ano
+               AND m.semestre   = t.semestre
+               AND m.turma      = t.turma
+               AND m.disciplina = t.disciplina
+            INNER JOIN LY_ALUNO a
+                ON a.aluno = m.aluno
+            LEFT JOIN LY_CURSO c
+                ON c.curso = t.curso
+            LEFT JOIN LY_DISCIPLINA d
+                ON d.disciplina = t.disciplina
+            LEFT JOIN LY_GRADE g
+                ON g.disciplina = t.disciplina
+               AND g.curso = t.curso
             WHERE m.ano = ?
               AND m.semestre IN ({self.periodos_placeholders})
               AND a.sit_aluno = 'Ativo'
-              AND a.curso IN ({self.cursos_placeholders})
-              AND t.sit_turma = 'aberta'
-              AND (t.curso IN ({self.cursos_placeholders}) OR t.curso IS NULL)
-              AND (c.faculdade IN ({self.faculdades_placeholders}) OR c.faculdade IS NULL)
+              AND t.sit_turma = ?
+              AND (
+                    t.curso IS NULL
+                    OR c.faculdade IN ({self.faculdades_placeholders})
+                  )
             ORDER BY t.disciplina, t.curso
         """
         params = (
             ANO_VIGENTE,
             *PERIODOS_VIGENTES,
-            *CURSOS_INCLUIDOS,   # a.curso
-            *CURSOS_INCLUIDOS,   # t.curso IN (...)
-            *FACULDADES_INCLUIDAS
+            SITUACAO_TURMA_VALIDA,
+            *FACULDADES_INCLUIDAS,
         )
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -214,20 +233,20 @@ class ImportadorDisciplinas:
     # -------------------------------------------------------------------------
     def transformar_dados(self, dados_lyceum):
         disciplinas = {}
-        for disciplina, nome_disciplina, curso, curso_aluno, serie_ideal in dados_lyceum:
-            # Tratar curso nulo/vazio como '999' (compartilhada)
+        for disciplina, nome_disciplina, curso, serie_ideal in dados_lyceum:
+            # Regra mantida: turma sem curso definido em LY_TURMA -> '999' (COMPARTILHADA)
             if curso is None or curso == '':
                 curso = '999'
 
-            # Aplicar mapeamento de curso (unificação)
+            # Aplicar mapeamento de curso (unificação de códigos duplicados)
             if curso in MAPEAMENTO_CURSOS:
                 curso_unificado, nome_curso_unificado = MAPEAMENTO_CURSOS[curso]
             else:
                 curso_unificado = curso
                 nome_curso_unificado = curso  # fallback
 
-            # Se for curso '999', forçamos nome "COMPARTILHADA"
-            if curso == '999':
+            # Garante o nome padronizado para o curso '999'
+            if curso_unificado == '999':
                 nome_curso_unificado = 'COMPARTILHADA'
 
             if disciplina not in disciplinas:
@@ -240,7 +259,6 @@ class ImportadorDisciplinas:
                     "nome_curso": nome_curso_unificado,
                     "periodos": set()
                 }
-            # Adiciona o período (serie_ideal) ao conjunto
             if serie_ideal is not None:
                 disciplinas[disciplina]["cursos"][curso_unificado]["periodos"].add(serie_ideal)
 
@@ -283,7 +301,7 @@ class ImportadorDisciplinas:
                     logger.warning(f"Período inválido para disciplina {disciplina}: {periodo}")
                     continue
 
-                # Se for curso '999', não validar com validar_codigo_curso
+                # Curso '999' (sem curso definido / compartilhada) não passa por validar_codigo_curso
                 if curso_unificado != '999':
                     if not validar_codigo_curso(curso_unificado):
                         logger.warning(f"Código do curso inválido: {curso_unificado} para disciplina {disciplina}")
@@ -372,12 +390,12 @@ class ImportadorDisciplinas:
     # -------------------------------------------------------------------------
     def executar_importacao(self):
         logger.info("=" * 70)
-        logger.info("IMPORTAÇÃO: imp_002_disciplina (com nome e período vindos das tabelas corretas)")
+        logger.info("IMPORTAÇÃO: imp_002_disciplina (JOIN corrigido + filtros centralizados)")
         logger.info("=" * 70)
         logger.info(f"ANO_VIGENTE: {ANO_VIGENTE}")
         logger.info(f"PERIODOS_VIGENTES: {PERIODOS_VIGENTES}")
         logger.info(f"FACULDADES_INCLUIDAS: {FACULDADES_INCLUIDAS}")
-        logger.info(f"CURSOS_INCLUIDOS ({len(CURSOS_INCLUIDOS)} cursos)")
+        logger.info(f"SITUACAO_TURMA_VALIDA: {SITUACAO_TURMA_VALIDA}")
 
         dados_lyceum = self.obter_dados_lyceum()
         logger.info(f"📊 Combinações disciplina/curso encontradas: {len(dados_lyceum)}")

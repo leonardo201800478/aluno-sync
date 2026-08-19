@@ -128,6 +128,11 @@ class ImportadorOfertas:
             return conn.execute(query, params).fetchall()
 
     def obter_turmas_regulares(self):
+        """
+        Retorna um dicionário com chave (disciplina, ano, semestre, curso_unificado)
+        e valor = lista de códigos de turmas T0* (regulares) para aquela combinação.
+        O curso é normalizado para o unificado, garantindo a correspondência correta.
+        """
         periodos_sql = ','.join('?' for _ in PERIODOS_VIGENTES)
         faculdades_sql = ','.join('?' for _ in FACULDADES_INCLUIDAS)
         with get_db_connection() as conn:
@@ -149,8 +154,11 @@ class ImportadorOfertas:
                   AND d.faculdade IN ({faculdades_sql})
             """, [ANO_VIGENTE, *PERIODOS_VIGENTES, SITUACAO_TURMA_VALIDA, *FACULDADES_INCLUIDAS]).fetchall()
         result = {}
-        for disciplina, turma, ano, semestre, curso in rows:
-            result.setdefault((disciplina, ano, semestre, curso), []).append(turma)
+        for disciplina, turma, ano, semestre, curso_original in rows:
+            # Normaliza o curso da turma regular
+            curso_unificado, _ = self._normalizar_curso(curso_original)
+            chave = (disciplina, ano, semestre, curso_unificado)
+            result.setdefault(chave, []).append(turma)
         return result
 
     def obter_curso_para_disciplina(self, disciplina):
@@ -187,10 +195,23 @@ class ImportadorOfertas:
             codigo_oferta = truncar_texto(gerar_codigo_oferta(disciplina, turma, ano, semestre), 30)
             tipo = truncar_texto(gerar_codigo_tipo_oferta(turma), 3)
             origem = ''
+
+            # Se for REC ou REP, tenta encontrar uma turma regular de origem
             if tipo in ('REC', 'REP'):
-                for turma_regular in turmas_regulares.get((disciplina, ano, semestre, curso), []):
+                chave = (disciplina, ano, semestre, curso_unificado)
+                for turma_regular in turmas_regulares.get(chave, []):
                     origem = gerar_codigo_oferta(disciplina, turma_regular, ano, semestre)
                     break
+                # === NOVA REGRA: se não encontrou origem, o tipo passa a ser REG ===
+                if not origem:
+                    tipo = 'REG'
+
+            # ========== CORREÇÃO DO TURNO ==========
+            turno_mapeado = mapear_turno(turno)
+            turnos_validos = ('M', 'T', 'N', 'I')
+            if turno_mapeado not in turnos_validos:
+                turno_mapeado = 'M'
+            # ======================================
 
             dados.append({
                 'codigoOferta': codigo_oferta,
@@ -198,9 +219,9 @@ class ImportadorOfertas:
                 'codigoDisciplina': codigo_disciplina,
                 'semestreOferta': truncar_texto(valor_fixo_2026_2(None), 6),
                 'codigoTipoOferta': tipo,
-                'codigoOfertaOrigem': truncar_texto(origem, 30),
-                'turno': truncar_texto(mapear_turno(turno), 1),
-                'codigoIdentificacaoAVA': truncar_texto(valor_fixo_vazio(None), 100),
+                'codigoOfertaOrigem': truncar_texto(origem, 30) or '',
+                'turno': truncar_texto(turno_mapeado, 1) or '',
+                'codigoIdentificacaoAVA': truncar_texto(valor_fixo_vazio(None), 100) or '',
             })
         # A PK é codigoOferta; em caso de duplicidade, conserva o primeiro registro.
         unicos = {}
@@ -224,9 +245,14 @@ class ImportadorOfertas:
                              data_criacao, data_atualizacao)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
                         """, (
-                            reg['codigoOferta'], reg['nomeOferta'], reg['codigoDisciplina'], reg['semestreOferta'],
-                            reg['codigoTipoOferta'], reg['codigoOfertaOrigem'] or None, reg['turno'] or None,
-                            reg['codigoIdentificacaoAVA'] or None
+                            reg['codigoOferta'],
+                            reg['nomeOferta'],
+                            reg['codigoDisciplina'],
+                            reg['semestreOferta'],
+                            reg['codigoTipoOferta'],
+                            reg['codigoOfertaOrigem'] or '',
+                            reg['turno'] or '',
+                            reg['codigoIdentificacaoAVA'] or ''
                         ))
                         inseridos += 1
                     except Exception as e:

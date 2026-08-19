@@ -3,11 +3,8 @@ import sys
 import os
 
 # Adiciona o diretório raiz do projeto (aluno-sync) ao sys.path
-# __file__ é o caminho para este arquivo.
-# Os.path.dirname duas vezes sobe de .../qstione/importadores para .../aluno-sync
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-# Agora os imports funcionam
 from core.database import get_db_connection
 from qstione.core.transformacoes import (
     valor_fixo_4000000001,
@@ -18,6 +15,48 @@ from qstione.core.validacoes import (
     validar_nome_curso,
     validar_quant_periodos
 )
+
+# =============================================================================
+# MAPEAMENTO DE CURSOS – UNIFICAÇÃO DE CÓDIGOS (mesmo do importador de disciplinas)
+# =============================================================================
+MAPEAMENTO_CURSOS = {
+    '034': ('034', 'ADMINISTRAÇÃO'),
+    '064': ('064', 'CIÊNCIAS BIOLÓGICAS'),
+    '062': ('064', 'CIÊNCIAS BIOLÓGICAS'),
+    '057': ('064', 'CIÊNCIAS BIOLÓGICAS'),
+    '009': ('009', 'CIÊNCIAS CONTÁBEIS'),
+    '023': ('009', 'CIÊNCIAS CONTÁBEIS'),
+    '055': ('055', 'CURSO SUPERIOR DE TECNOLOGIA EM GESTÃO DE RECURSOS HUMANOS'),
+    '056': ('056', 'DESIGN'),
+    '141': ('056', 'DESIGN'),
+    '031': ('031', 'DIREITO'),
+    '065': ('065', 'EDUCAÇÃO FÍSICA'),
+    '036': ('065', 'EDUCAÇÃO FÍSICA'),
+    '037': ('065', 'EDUCAÇÃO FÍSICA'),
+    '013': ('013', 'ENFERMAGEM'),
+    '079': ('079', 'ENGENHARIA'),
+    '006': ('006', 'ENGENHARIA CIVIL'),
+    '020': ('006', 'ENGENHARIA CIVIL'),
+    '097': ('097', 'ENGENHARIA DA COMPUTAÇÃO'),
+    '059': ('059', 'ENGENHARIA DE PRODUÇÃO'),
+    '142': ('059', 'ENGENHARIA DE PRODUÇÃO'),
+    '044': ('044', 'ENGENHARIA ELÉTRICA'),
+    '139': ('044', 'ENGENHARIA ELÉTRICA'),
+    '017': ('017', 'ENGENHARIA MECÂNICA'),
+    '132': ('017', 'ENGENHARIA MECÂNICA'),
+    '126': ('126', 'FARMÁCIA'),
+    '060': ('060', 'JORNALISMO'),
+    '014': ('014', 'MEDICINA'),
+    '024': ('024', 'NUTRIÇÃO'),
+    '007': ('007', 'ODONTOLOGIA'),
+    '130': ('007', 'ODONTOLOGIA'),
+    '128': ('128', 'PEDAGOGIA'),
+    '145': ('145', 'PSICOLOGIA'),
+    '061': ('061', 'PUBLICIDADE E PROPAGANDA'),
+    '025': ('025', 'SERVIÇO SOCIAL'),
+    '019': ('019', 'SISTEMAS DE INFORMAÇÃO'),
+    '999': ('999', 'COMPARTILHADA'),  # (não usado aqui, mas mantido por consistência)
+}
 
 
 class ImportadorCursos:
@@ -110,34 +149,69 @@ class ImportadorCursos:
             return cursor.fetchall()
 
     def transformar_dados(self, dados_lyceum):
-        dados_transformados = []
+        # Dicionário para agrupar por código unificado
+        cursos_agrupados = {}
+
         for registro in dados_lyceum:
-            curso, nome, prazo_ideal = registro
+            curso_original, nome_original, prazo_ideal = registro
 
-            nome_curso = truncar_texto(nome, 64)
+            # Aplica mapeamento (de-para)
+            if curso_original in MAPEAMENTO_CURSOS:
+                curso_unificado, nome_unificado = MAPEAMENTO_CURSOS[curso_original]
+            else:
+                curso_unificado = curso_original
+                nome_unificado = nome_original  # fallback (será truncado depois)
 
-            if not validar_codigo_curso(curso):
-                print(f"  ⚠️  Código do curso inválido: {curso}")
+            # Agrupa pelo código unificado
+            if curso_unificado not in cursos_agrupados:
+                cursos_agrupados[curso_unificado] = {
+                    'nome': nome_unificado,
+                    'prazo_maximo': prazo_ideal,
+                    'quantidade': 0
+                }
+            else:
+                # Atualiza o nome para o nome do mapeamento (se houver)
+                # Caso o mapeamento forneça nome, ele tem prioridade
+                if curso_original in MAPEAMENTO_CURSOS:
+                    cursos_agrupados[curso_unificado]['nome'] = nome_unificado
+                # Atualiza o maior prazo (se o novo for maior)
+                if prazo_ideal is not None:
+                    if (cursos_agrupados[curso_unificado]['prazo_maximo'] is None or
+                        prazo_ideal > cursos_agrupados[curso_unificado]['prazo_maximo']):
+                        cursos_agrupados[curso_unificado]['prazo_maximo'] = prazo_ideal
+            cursos_agrupados[curso_unificado]['quantidade'] += 1
+
+        # Agora transforma cada grupo em um registro final
+        dados_transformados = []
+        for codigo, info in cursos_agrupados.items():
+            nome_curso = info['nome']
+            prazo = info['prazo_maximo']
+
+            # Trunca nome para 64 caracteres
+            nome_curso_truncado = truncar_texto(nome_curso, 64)
+
+            if not validar_codigo_curso(codigo):
+                print(f"  ⚠️  Código do curso inválido: {codigo}")
                 continue
 
-            if not validar_nome_curso(nome_curso):
-                print(f"  ⚠️  Nome do curso inválido após truncagem: {nome_curso}")
+            if not validar_nome_curso(nome_curso_truncado):
+                print(f"  ⚠️  Nome do curso inválido após truncagem: {nome_curso_truncado}")
                 continue
 
-            # Aproveita o retorno da validação
-            quant_periodos = validar_quant_periodos(prazo_ideal)
+            quant_periodos = validar_quant_periodos(prazo)
             if quant_periodos is None:
-                print(f"  ⚠️  Quantidade de períodos inválida: {prazo_ideal} para o curso {curso}")
+                print(f"  ⚠️  Quantidade de períodos inválida: {prazo} para o curso {codigo}")
                 continue
 
             codigo_unidade = valor_fixo_4000000001(None)
 
             dados_transformados.append({
-                'codigoCurso': str(curso)[:30],
-                'nomeCurso': nome_curso,
+                'codigoCurso': str(codigo)[:30],
+                'nomeCurso': nome_curso_truncado,
                 'quantPeriodos': quant_periodos,
                 'codigoUnidadeOrganizacional': codigo_unidade
             })
+
         return dados_transformados
 
     def importar_para_qstione(self, dados_transformados):
@@ -190,15 +264,15 @@ class ImportadorCursos:
 
     def executar_importacao(self):
         print("=" * 70)
-        print("IMPORTAÇÃO: imp_001_cursos")
+        print("IMPORTAÇÃO: imp_001_cursos (com mapeamento unificado)")
         print("=" * 70)
 
         dados_lyceum = self.obter_dados_lyceum()
         print(f"📊 Registros encontrados no Lyceum: {len(dados_lyceum)}")
 
-        print("🔄 Transformando dados...")
+        print("🔄 Transformando dados (aplicando mapeamento de cursos)...")
         dados_transformados = self.transformar_dados(dados_lyceum)
-        print(f"✅ Registros válidos para importação: {len(dados_transformados)}")
+        print(f"✅ Registros únicos (após unificação) para importação: {len(dados_transformados)}")
 
         print("💾 Importando para Qstione...")
         resultado = self.importar_para_qstione(dados_transformados)
