@@ -2,36 +2,25 @@
 qstione/importadores/imp_006_usuarios.py
 Importador para tabela imp_006_usuarios.
 
-Somente docentes presentes na população de turmas/docentes do período vigente
-são importados. A elegibilidade segue a mesma origem de turma utilizada pelo
-imp_002_disciplina.py:
+A população de docentes é determinada diretamente por LY_TURMA_DOCENTE:
+- ano/período vigentes;
+- curso da turma obtido de LY_TURMA.curso;
+- faculdade do curso filtrada pelas mesmas regras do imp_002_disciplina;
+- docente identificado exclusivamente por LY_TURMA_DOCENTE.num_func.
 
-- ano/período vigente;
-- LY_TURMA_DOCENTE relacionado à LY_TURMA pela chave completa
-  (ano, semestre, turma, disciplina);
-- o curso considerado é SEMPRE LY_TURMA.curso;
-- cursos duplicados são unificados pelo mesmo MAPEAMENTO_CURSOS do imp_002;
-- turma sem curso definido é tratada como curso 999 (COMPARTILHADA);
-- o docente precisa estar ativo e possuir LY_DOCENTE.mailbox válido.
-
+Depois de obter os NUM_FUNC elegíveis, o cadastro é completado em LY_DOCENTE.
 O e-mail vem exclusivamente de LY_DOCENTE.mailbox.
-A tabela destino é reconstruída integralmente a cada execução.
 """
 
 import os
 import sys
 
-# Permite executar diretamente pelo botão Play do VS Code, independentemente do cwd.
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from core.database import get_db_connection
-from qstione.core.transformacoes import (
-    extrair_usuario_email,
-    converter_minusculas,
-    truncar_texto,
-)
+from qstione.core.transformacoes import extrair_usuario_email, converter_minusculas, truncar_texto
 from qstione.core.validacoes import validar_email, validar_matricula, validar_nome
 from qstione.config.filtros import (
     ANO_VIGENTE,
@@ -43,7 +32,7 @@ from qstione.importadores.imp_002_disciplina import MAPEAMENTO_CURSOS
 
 
 class ImportadorUsuarios:
-    """Importa docentes habilitados nas turmas vigentes."""
+    """Importa todos os docentes presentes nas turmas elegíveis do período vigente."""
 
     def __init__(self):
         self.periodos_placeholders = ','.join(['?'] * len(PERIODOS_VIGENTES))
@@ -57,7 +46,7 @@ class ImportadorUsuarios:
                     WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'
                 """, (nome_tabela,)).fetchone() is not None
         except Exception as e:
-            print(f"  ⚠️  Erro ao verificar existência da tabela: {e}")
+            print(f"  ⚠️ Erro ao verificar existência da tabela: {e}")
             return False
 
     def _indice_existe(self, nome_indice: str) -> bool:
@@ -65,10 +54,10 @@ class ImportadorUsuarios:
             with get_db_connection(database_name='qstione') as conn:
                 return conn.execute(
                     "SELECT 1 FROM sys.indexes WHERE name = ?",
-                    (nome_indice,),
+                    (nome_indice,)
                 ).fetchone() is not None
         except Exception as e:
-            print(f"  ⚠️  Erro ao verificar índice: {e}")
+            print(f"  ⚠️ Erro ao verificar índice: {e}")
             return False
 
     def _criar_tabela(self):
@@ -107,88 +96,89 @@ class ImportadorUsuarios:
 
     @staticmethod
     def _curso_unificado(curso):
-        """Aplica exatamente o MAPEAMENTO_CURSOS definido pelo imp_002."""
-        curso = str(curso).strip() if curso is not None else ''
-        if not curso:
+        """Aplica exatamente o mapeamento de cursos utilizado pelo imp_002."""
+        if curso is None or str(curso).strip() == '':
             return '999'
+        curso = str(curso).strip()
         return MAPEAMENTO_CURSOS.get(curso, (curso, curso))[0]
 
     def obter_dados_lyceum(self):
         """
-        Obtém docentes ligados às turmas vigentes.
+        Obtém primeiro os NUM_FUNC diretamente de LY_TURMA_DOCENTE.
 
-        A relação LY_TURMA_DOCENTE -> LY_TURMA utiliza a chave completa
-        (ano, semestre, turma, disciplina), exatamente como o imp_002.
-        O curso vem exclusivamente de LY_TURMA.curso.
+        A elegibilidade é determinada pela turma/disciplina e pelo curso da
+        própria turma, seguindo a lógica do imp_002. Depois o cadastro é
+        completado em LY_DOCENTE.
         """
+        query = f"""
+            SELECT DISTINCT
+                td.num_func,
+                d.matricula,
+                d.mailbox,
+                COALESCE(d.nome_social, d.nome_compl) AS nome_completo,
+                d.cpf,
+                t.curso
+            FROM LY_TURMA_DOCENTE td
+            INNER JOIN LY_TURMA t
+                ON t.ano = td.ano
+               AND t.semestre = td.periodo
+               AND t.turma = td.turma
+               AND t.disciplina = td.disciplina
+            LEFT JOIN LY_CURSO c
+                ON c.curso = t.curso
+            INNER JOIN LY_DOCENTE d
+                ON d.num_func = td.num_func
+            WHERE td.ano = ?
+              AND td.periodo IN ({self.periodos_placeholders})
+              AND t.sit_turma = ?
+              AND (
+                    t.curso IS NULL
+                    OR c.faculdade IN ({self.faculdades_placeholders})
+                  )
+              AND d.ativo = 'S'
+              AND d.mailbox IS NOT NULL
+              AND LTRIM(RTRIM(d.mailbox)) <> ''
+            ORDER BY td.num_func, d.matricula
+        """
+
+        params = (
+            ANO_VIGENTE,
+            *PERIODOS_VIGENTES,
+            SITUACAO_TURMA_VALIDA,
+            *FACULDADES_INCLUIDAS,
+        )
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT DISTINCT
-                    td.num_func,
-                    d.matricula,
-                    d.mailbox,
-                    COALESCE(d.nome_social, d.nome_compl) AS nome_completo,
-                    d.cpf,
-                    t.curso
-                FROM LY_TURMA_DOCENTE td
-                INNER JOIN LY_TURMA t
-                    ON t.ano = td.ano
-                   AND t.semestre = td.periodo
-                   AND t.turma = td.turma
-                   AND t.disciplina = td.disciplina
-                INNER JOIN LY_DOCENTE d
-                    ON d.num_func = td.num_func
-                LEFT JOIN LY_CURSO c
-                    ON c.curso = t.curso
-                WHERE td.ano = ?
-                  AND td.periodo IN ({self.periodos_placeholders})
-                  AND t.sit_turma = ?
-                  AND (
-                        t.curso IS NULL
-                        OR c.faculdade IN ({self.faculdades_placeholders})
-                      )
-                  AND d.ativo = 'S'
-                  AND d.mailbox IS NOT NULL
-                  AND LTRIM(RTRIM(d.mailbox)) <> ''
-                ORDER BY d.matricula, td.num_func, t.curso
-            """, (
-                ANO_VIGENTE,
-                *PERIODOS_VIGENTES,
-                SITUACAO_TURMA_VALIDA,
-                *FACULDADES_INCLUIDAS,
-            ))
+            cursor.execute(query, params)
             return cursor.fetchall()
 
     def transformar_dados(self, dados_lyceum):
         """
-        Valida docentes e elimina duplicidades por matrícula.
+        Cria o cadastro do usuário a partir do docente encontrado pelo NUM_FUNC.
 
-        O curso/turma é utilizado para determinar a população elegível, mas
-        não faz parte da tabela imp_006_usuarios. Assim, um docente que lecione
-        várias turmas/cursos continua gerando apenas um usuário.
+        Um docente pode aparecer em várias turmas/cursos; a tabela de usuários
+        deve possuir apenas um registro por matrícula.
         """
         registros = {}
 
-        for matricula, matricula_docente, email, nome, cpf, curso in dados_lyceum:
-            curso_unificado = self._curso_unificado(curso)
-
-            if not validar_matricula(matricula_docente):
-                print(f"  ⚠️  Matrícula inválida: {matricula_docente} (curso {curso_unificado})")
+        for num_func, matricula, email, nome, cpf, curso in dados_lyceum:
+            if not validar_matricula(matricula):
+                print(f"  ⚠️ Matrícula inválida para NUM_FUNC {num_func}: {matricula}")
                 continue
             if not validar_email(email):
-                print(f"  ⚠️  Email inválido: {email}")
+                print(f"  ⚠️ Email inválido para NUM_FUNC {num_func}: {email}")
                 continue
             if not validar_nome(nome):
-                print(f"  ⚠️  Nome inválido: {nome}")
+                print(f"  ⚠️ Nome inválido para NUM_FUNC {num_func}: {nome}")
                 continue
 
-            matricula_final = str(matricula_docente)[:20]
             email_final = converter_minusculas(email)[:100]
             codigo_usuario = extrair_usuario_email(email)
+            matricula_final = str(matricula)[:20]
 
-            # A matrícula é a chave primária. Caso o mesmo docente apareça em
-            # várias turmas/cursos, preservamos somente um registro.
+            # A chave do usuário é a matrícula, independentemente da quantidade
+            # de turmas/cursos em que o NUM_FUNC aparece.
             if matricula_final not in registros:
                 registros[matricula_final] = {
                     'matriculaUsuario': matricula_final,
@@ -200,29 +190,22 @@ class ImportadorUsuarios:
         return list(registros.values())
 
     def importar_para_qstione(self, dados_transformados):
-        """Reconstrói integralmente imp_006_usuarios."""
         self._criar_tabela()
 
         inseridos = erros = 0
+
         try:
             with get_db_connection(database_name='qstione') as conn:
+                # Reconstrução completa da tabela a cada execução.
+                conn.execute("DELETE FROM imp_006_usuarios")
                 cursor = conn.cursor()
-
-                # Regra dos importadores Qstione: carga sempre limpa.
-                cursor.execute("DELETE FROM imp_006_usuarios")
 
                 for reg in dados_transformados:
                     try:
                         cursor.execute("""
                             INSERT INTO imp_006_usuarios
-                            (
-                                matriculaUsuario,
-                                codigoUsuario,
-                                emailUsuario,
-                                nomeUsuario,
-                                data_criacao,
-                                data_atualizacao
-                            )
+                            (matriculaUsuario, codigoUsuario, emailUsuario, nomeUsuario,
+                             data_criacao, data_atualizacao)
                             VALUES (?, ?, ?, ?, GETDATE(), GETDATE())
                         """, (
                             reg['matriculaUsuario'],
@@ -233,7 +216,7 @@ class ImportadorUsuarios:
                         inseridos += 1
                     except Exception as e:
                         erros += 1
-                        print(f"  ✗  Erro ao importar {reg['matriculaUsuario']}: {e}")
+                        print(f"  ✗ Erro ao importar {reg['matriculaUsuario']}: {e}")
 
                 conn.commit()
         except Exception as e:
@@ -257,16 +240,17 @@ class ImportadorUsuarios:
         print("IMPORTAÇÃO: imp_006_usuarios")
         print("=" * 70)
         print(
-            f"🎓 Docentes habilitados: ano={ANO_VIGENTE}, "
-            f"períodos={PERIODOS_VIGENTES}"
+            f"🎓 Docentes por LY_TURMA_DOCENTE: ano={ANO_VIGENTE}, "
+            f"períodos={PERIODOS_VIGENTES}, faculdades={FACULDADES_INCLUIDAS}"
         )
-        print("🔗 Cursos/turmas: mesma regra de origem do imp_002_disciplina")
 
         dados = self.obter_dados_lyceum()
-        print(f"📊 Vínculos docente/turma encontrados: {len(dados)}")
+        num_funcs = {str(row[0]) for row in dados if row[0] is not None}
+        print(f"📊 Registros de vínculos encontrados: {len(dados)}")
+        print(f"👨‍🏫 NUM_FUNC únicos elegíveis: {len(num_funcs)}")
 
         transformados = self.transformar_dados(dados)
-        print(f"✅ Usuários únicos: {len(transformados)}")
+        print(f"✅ Usuários únicos válidos: {len(transformados)}")
 
         resultado = self.importar_para_qstione(transformados)
         print(
@@ -277,4 +261,6 @@ class ImportadorUsuarios:
 
 
 if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO)
     ImportadorUsuarios().executar_importacao()
