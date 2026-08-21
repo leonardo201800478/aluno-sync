@@ -3,8 +3,7 @@ qstione/importadores/imp_006_usuarios.py
 Importador para tabela imp_006_usuarios.
 
 A população de docentes é determinada diretamente por LY_TURMA_DOCENTE.
-Inclui diagnóstico detalhado para identificar por que um NUM_FUNC não chega
-à relação final de usuários.
+O NUM_FUNC é a origem da população; o cadastro é completado em LY_DOCENTE.
 """
 
 import os
@@ -17,7 +16,7 @@ if ROOT not in sys.path:
 
 from core.database import get_db_connection
 from qstione.core.transformacoes import extrair_usuario_email, converter_minusculas, truncar_texto
-from qstione.core.validacoes import validar_email, validar_matricula, validar_nome
+from qstione.core.validacoes import validar_email, validar_nome
 from qstione.config.filtros import (
     ANO_VIGENTE,
     PERIODOS_VIGENTES,
@@ -25,7 +24,6 @@ from qstione.config.filtros import (
     SITUACAO_TURMA_VALIDA,
 )
 from qstione.importadores.imp_002_disciplina import MAPEAMENTO_CURSOS
-
 
 LOG_DIR = os.path.join(ROOT, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -43,14 +41,16 @@ DEBUG_NUM_FUNC = "6980"
 
 
 class ImportadorUsuarios:
-    """Importa docentes elegíveis e registra detalhadamente os motivos de exclusão."""
+    """Importa docentes encontrados nas turmas elegíveis."""
 
     def __init__(self):
         self.periodos_placeholders = ','.join(['?'] * len(PERIODOS_VIGENTES))
         self.faculdades_placeholders = ','.join(['?'] * len(FACULDADES_INCLUIDAS))
         logger.info("=" * 90)
-        logger.info("INÍCIO imp_006_usuarios | ANO=%s | PERIODOS=%s | FACULDADES=%s | DEBUG_NUM_FUNC=%s",
-                    ANO_VIGENTE, PERIODOS_VIGENTES, FACULDADES_INCLUIDAS, DEBUG_NUM_FUNC)
+        logger.info(
+            "INÍCIO imp_006_usuarios | ANO=%s | PERIODOS=%s | FACULDADES=%s | DEBUG_NUM_FUNC=%s",
+            ANO_VIGENTE, PERIODOS_VIGENTES, FACULDADES_INCLUIDAS, DEBUG_NUM_FUNC
+        )
         logger.info("LOG_FILE=%s", LOG_FILE)
 
     def _tabela_existe(self, nome_tabela: str) -> bool:
@@ -60,7 +60,7 @@ class ImportadorUsuarios:
                     SELECT 1 FROM INFORMATION_SCHEMA.TABLES
                     WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'
                 """, (nome_tabela,)).fetchone() is not None
-        except Exception as e:
+        except Exception:
             logger.exception("Erro ao verificar existência da tabela %s", nome_tabela)
             return False
 
@@ -99,13 +99,14 @@ class ImportadorUsuarios:
 
     @staticmethod
     def _curso_unificado(curso):
+        """Aplica o mesmo mapeamento de cursos do imp_002."""
         if curso is None or str(curso).strip() == '':
             return '999'
         curso = str(curso).strip()
         return MAPEAMENTO_CURSOS.get(curso, (curso, curso))[0]
 
     def _diagnosticar_num_func(self, conn):
-        """Executa uma investigação completa do NUM_FUNC configurado."""
+        """Registra o caminho do NUM_FUNC de diagnóstico nas tabelas de origem."""
         nf = DEBUG_NUM_FUNC
         logger.info("===== DIAGNÓSTICO ESPECÍFICO NUM_FUNC=%s =====", nf)
 
@@ -154,7 +155,7 @@ class ImportadorUsuarios:
                 ORDER BY td.ano, td.periodo, td.turma, td.disciplina
             """, (nf, ANO_VIGENTE, *PERIODOS_VIGENTES)),
             "5_docente": ("""
-                SELECT d.num_func, d.matricula, d.mailbox, d.nome_social, d.nome_compl, d.ativo
+                SELECT d.num_func, d.mailbox, d.nome_social, d.nome_compl
                 FROM LY_DOCENTE d
                 WHERE d.num_func = ?
             """, (nf,)),
@@ -172,29 +173,44 @@ class ImportadorUsuarios:
         logger.info("===== FIM DIAGNÓSTICO NUM_FUNC=%s =====", nf)
 
     def obter_dados_lyceum(self):
+        """
+        A população vem exclusivamente de LY_TURMA_DOCENTE/NUM_FUNC.
+        Não há filtro por matrícula nem por ativo em LY_DOCENTE.
+        """
         query = f"""
             SELECT DISTINCT
-                td.num_func, d.matricula, d.mailbox,
+                td.num_func,
+                d.mailbox,
                 COALESCE(d.nome_social, d.nome_compl) AS nome_completo,
-                d.cpf, t.curso
+                d.cpf,
+                t.curso
             FROM LY_TURMA_DOCENTE td
             INNER JOIN LY_TURMA t
                 ON t.ano = td.ano
                AND t.semestre = td.periodo
                AND t.turma = td.turma
                AND t.disciplina = td.disciplina
-            LEFT JOIN LY_CURSO c ON c.curso = t.curso
-            INNER JOIN LY_DOCENTE d ON d.num_func = td.num_func
+            LEFT JOIN LY_CURSO c
+                ON c.curso = t.curso
+            INNER JOIN LY_DOCENTE d
+                ON d.num_func = td.num_func
             WHERE td.ano = ?
               AND td.periodo IN ({self.periodos_placeholders})
               AND t.sit_turma = ?
-              AND (t.curso IS NULL OR c.faculdade IN ({self.faculdades_placeholders}))
-              AND d.ativo = 'S'
-              AND d.mailbox IS NOT NULL
-              AND LTRIM(RTRIM(d.mailbox)) <> ''
-            ORDER BY td.num_func, d.matricula
+              AND (
+                    t.curso IS NULL
+                    OR c.faculdade IN ({self.faculdades_placeholders})
+                  )
+            ORDER BY td.num_func
         """
-        params = (ANO_VIGENTE, *PERIODOS_VIGENTES, SITUACAO_TURMA_VALIDA, *FACULDADES_INCLUIDAS)
+
+        params = (
+            ANO_VIGENTE,
+            *PERIODOS_VIGENTES,
+            SITUACAO_TURMA_VALIDA,
+            *FACULDADES_INCLUIDAS,
+        )
+
         with get_db_connection() as conn:
             self._diagnosticar_num_func(conn)
             cursor = conn.cursor()
@@ -208,75 +224,107 @@ class ImportadorUsuarios:
             return rows
 
     def transformar_dados(self, dados_lyceum):
+        """Monta um usuário por NUM_FUNC, sem exigir matrícula ou ativo."""
         registros = {}
-        for num_func, matricula, email, nome, cpf, curso in dados_lyceum:
+
+        for num_func, email, nome, cpf, curso in dados_lyceum:
             nf = str(num_func).strip()
             if nf == DEBUG_NUM_FUNC:
-                logger.info("TRANSFORMANDO NUM_FUNC=%s | matricula=%s | email=%s | nome=%s | curso=%s",
-                            nf, matricula, email, nome, curso)
-            if not validar_matricula(matricula):
-                if nf == DEBUG_NUM_FUNC: logger.warning("EXCLUIDO NUM_FUNC=%s: matrícula inválida (%r)", nf, matricula)
-                continue
+                logger.info(
+                    "TRANSFORMANDO NUM_FUNC=%s | email=%s | nome=%s | curso=%s",
+                    nf, email, nome, curso
+                )
+
             if not validar_email(email):
-                if nf == DEBUG_NUM_FUNC: logger.warning("EXCLUIDO NUM_FUNC=%s: email inválido (%r)", nf, email)
+                if nf == DEBUG_NUM_FUNC:
+                    logger.warning("EXCLUIDO NUM_FUNC=%s: email inválido (%r)", nf, email)
                 continue
             if not validar_nome(nome):
-                if nf == DEBUG_NUM_FUNC: logger.warning("EXCLUIDO NUM_FUNC=%s: nome inválido (%r)", nf, nome)
+                if nf == DEBUG_NUM_FUNC:
+                    logger.warning("EXCLUIDO NUM_FUNC=%s: nome inválido (%r)", nf, nome)
                 continue
+
             email_final = converter_minusculas(email)[:100]
             codigo_usuario = extrair_usuario_email(email)
-            matricula_final = str(matricula)[:20]
-            if matricula_final not in registros:
-                registros[matricula_final] = {
-                    'matriculaUsuario': matricula_final,
+
+            # Como a matrícula deixou de participar da origem, o NUM_FUNC passa
+            # a ser a chave do usuário importado.
+            if nf not in registros:
+                registros[nf] = {
+                    'matriculaUsuario': nf[:20],
                     'codigoUsuario': codigo_usuario[:24] if codigo_usuario else None,
                     'emailUsuario': email_final,
                     'nomeUsuario': truncar_texto(nome, 64),
                 }
                 if nf == DEBUG_NUM_FUNC:
-                    logger.info("INCLUÍDO NUM_FUNC=%s como matrícula=%s", nf, matricula_final)
-            elif nf == DEBUG_NUM_FUNC:
-                logger.info("NUM_FUNC=%s já representado pela matrícula=%s", nf, matricula_final)
+                    logger.info("INCLUÍDO NUM_FUNC=%s como matriculaUsuario=%s", nf, nf[:20])
+
         logger.info("TRANSFORMAÇÃO FINAL: %d usuários únicos", len(registros))
         return list(registros.values())
 
     def importar_para_qstione(self, dados_transformados):
         self._criar_tabela()
         inseridos = erros = 0
+
         try:
             with get_db_connection(database_name='qstione') as conn:
                 conn.execute("DELETE FROM imp_006_usuarios")
                 cursor = conn.cursor()
+
                 for reg in dados_transformados:
                     try:
                         cursor.execute("""
                             INSERT INTO imp_006_usuarios
-                            (matriculaUsuario, codigoUsuario, emailUsuario, nomeUsuario, data_criacao, data_atualizacao)
+                            (matriculaUsuario, codigoUsuario, emailUsuario, nomeUsuario,
+                             data_criacao, data_atualizacao)
                             VALUES (?, ?, ?, ?, GETDATE(), GETDATE())
-                        """, (reg['matriculaUsuario'], reg['codigoUsuario'], reg['emailUsuario'], reg['nomeUsuario']))
+                        """, (
+                            reg['matriculaUsuario'],
+                            reg['codigoUsuario'],
+                            reg['emailUsuario'],
+                            reg['nomeUsuario'],
+                        ))
                         inseridos += 1
-                    except Exception as e:
+                    except Exception:
                         erros += 1
-                        logger.exception("Erro ao importar matrícula=%s", reg['matriculaUsuario'])
+                        logger.exception("Erro ao importar matriculaUsuario=%s", reg['matriculaUsuario'])
+
                 conn.commit()
         except Exception:
             logger.exception("Erro durante reconstrução da tabela")
-            return {'total_inseridos': 0, 'total_atualizados': 0, 'total_erros': len(dados_transformados), 'total_processados': len(dados_transformados)}
-        return {'total_inseridos': inseridos, 'total_atualizados': 0, 'total_erros': erros, 'total_processados': len(dados_transformados)}
+            return {
+                'total_inseridos': 0,
+                'total_atualizados': 0,
+                'total_erros': len(dados_transformados),
+                'total_processados': len(dados_transformados),
+            }
+
+        return {
+            'total_inseridos': inseridos,
+            'total_atualizados': 0,
+            'total_erros': erros,
+            'total_processados': len(dados_transformados),
+        }
 
     def executar_importacao(self):
         print("=" * 70)
         print("IMPORTAÇÃO: imp_006_usuarios")
         print("=" * 70)
-        print(f"🎓 Docentes por LY_TURMA_DOCENTE: ano={ANO_VIGENTE}, períodos={PERIODOS_VIGENTES}, faculdades={FACULDADES_INCLUIDAS}")
+        print(
+            f"🎓 Docentes por LY_TURMA_DOCENTE: ano={ANO_VIGENTE}, "
+            f"períodos={PERIODOS_VIGENTES}, faculdades={FACULDADES_INCLUIDAS}"
+        )
         print(f"🔎 Log detalhado: {LOG_FILE}")
+
         dados = self.obter_dados_lyceum()
         num_funcs = {str(row[0]).strip() for row in dados if row[0] is not None}
         print(f"📊 Registros de vínculos encontrados: {len(dados)}")
         print(f"👨‍🏫 NUM_FUNC únicos elegíveis: {len(num_funcs)}")
         print(f"🔎 NUM_FUNC {DEBUG_NUM_FUNC} na consulta final: {'SIM' if DEBUG_NUM_FUNC in num_funcs else 'NÃO'}")
+
         transformados = self.transformar_dados(dados)
         print(f"✅ Usuários únicos válidos: {len(transformados)}")
+
         resultado = self.importar_para_qstione(transformados)
         print(f"📈 Inseridos: {resultado['total_inseridos']} | Erros: {resultado['total_erros']}")
         logger.info("FIM imp_006_usuarios")
