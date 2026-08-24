@@ -8,6 +8,9 @@ SEM chave primária natural - usa IDENTITY.
 import logging
 from typing import List, Dict, Any, Optional
 from core.database import get_db_connection, execute_query, fetch_all, fetch_one
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 logger = logging.getLogger(__name__)
 

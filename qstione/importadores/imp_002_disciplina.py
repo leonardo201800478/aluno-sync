@@ -186,43 +186,49 @@ class ImportadorDisciplinas:
     #    precisa estar em FACULDADES_INCLUIDAS.
     # -------------------------------------------------------------------------
     def obter_dados_lyceum(self):
+        """
+        Obtém as turmas diretamente de LY_TURMA.
+
+        A existência de aluno em LY_MATRICULA ou de docente em
+        LY_TURMA_DOCENTE não interfere na seleção.
+
+        A turma precisa apenas:
+        - pertencer ao ano vigente;
+        - pertencer a um dos períodos vigentes;
+        - estar na situação válida;
+        - possuir curso cuja faculdade esteja em FACULDADES_INCLUIDAS.
+
+        LY_DISCIPLINA e LY_GRADE são utilizadas somente para complementar
+        os dados da turma.
+        """
         query = f"""
             SELECT DISTINCT
                 t.disciplina,
                 d.nome AS nome_disciplina,
                 t.curso,
                 g.serie_ideal
-            FROM LY_MATRICULA m
-            INNER JOIN LY_TURMA t
-                ON m.ano        = t.ano
-               AND m.semestre   = t.semestre
-               AND m.turma      = t.turma
-               AND m.disciplina = t.disciplina
-            INNER JOIN LY_ALUNO a
-                ON a.aluno = m.aluno
+            FROM LY_TURMA t
             LEFT JOIN LY_CURSO c
                 ON c.curso = t.curso
             LEFT JOIN LY_DISCIPLINA d
                 ON d.disciplina = t.disciplina
             LEFT JOIN LY_GRADE g
                 ON g.disciplina = t.disciplina
-               AND g.curso = t.curso
-            WHERE m.ano = ?
-              AND m.semestre IN ({self.periodos_placeholders})
-              AND a.sit_aluno = 'Ativo'
-              AND t.sit_turma = ?
-              AND (
-                    t.curso IS NULL
-                    OR c.faculdade IN ({self.faculdades_placeholders})
-                  )
+            AND g.curso = t.curso
+            WHERE t.ano = ?
+            AND t.semestre IN ({self.periodos_placeholders})
+            AND t.sit_turma = ?
+            AND c.faculdade IN ({self.faculdades_placeholders})
             ORDER BY t.disciplina, t.curso
         """
+
         params = (
             ANO_VIGENTE,
             *PERIODOS_VIGENTES,
             SITUACAO_TURMA_VALIDA,
             *FACULDADES_INCLUIDAS,
         )
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)

@@ -2,28 +2,56 @@
 qstione/importadores/imp_006_usuarios.py
 Importador para tabela imp_006_usuarios.
 
-Somente docentes presentes na mesma população do imp_007_usuarios_cursos
-(ano/período vigente) são importados. O e-mail vem exclusivamente de
-LY_DOCENTE.mailbox.
+A população de docentes é determinada diretamente por LY_TURMA_DOCENTE.
+O NUM_FUNC é a origem da população; o cadastro é completado em LY_DOCENTE.
 """
 
 import os
 import sys
+import logging
 
-# Permite executar diretamente pelo botão Play do VS Code, independentemente do cwd.
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from core.database import get_db_connection
 from qstione.core.transformacoes import extrair_usuario_email, converter_minusculas, truncar_texto
-from qstione.core.validacoes import validar_email, validar_matricula, validar_nome
-from qstione.config.filtros import ANO_VIGENTE, PERIODOS_VIGENTES
+from qstione.core.validacoes import validar_email, validar_nome
+from qstione.config.filtros import (
+    ANO_VIGENTE,
+    PERIODOS_VIGENTES,
+    FACULDADES_INCLUIDAS,
+    SITUACAO_TURMA_VALIDA,
+)
+from qstione.importadores.imp_002_disciplina import MAPEAMENTO_CURSOS
+
+LOG_DIR = os.path.join(ROOT, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "imp_006_usuarios.log")
+
+logger = logging.getLogger("imp_006_usuarios")
+logger.setLevel(logging.DEBUG)
+logger.handlers.clear()
+file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+file_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+logger.addHandler(file_handler)
+logger.propagate = False
+
+DEBUG_NUM_FUNC = "6980"
 
 
 class ImportadorUsuarios:
+    """Importa docentes encontrados nas turmas elegíveis."""
+
     def __init__(self):
-        pass
+        self.periodos_placeholders = ','.join(['?'] * len(PERIODOS_VIGENTES))
+        self.faculdades_placeholders = ','.join(['?'] * len(FACULDADES_INCLUIDAS))
+        logger.info("=" * 90)
+        logger.info(
+            "INÍCIO imp_006_usuarios | ANO=%s | PERIODOS=%s | FACULDADES=%s | DEBUG_NUM_FUNC=%s",
+            ANO_VIGENTE, PERIODOS_VIGENTES, FACULDADES_INCLUIDAS, DEBUG_NUM_FUNC
+        )
+        logger.info("LOG_FILE=%s", LOG_FILE)
 
     def _tabela_existe(self, nome_tabela: str) -> bool:
         try:
@@ -32,22 +60,22 @@ class ImportadorUsuarios:
                     SELECT 1 FROM INFORMATION_SCHEMA.TABLES
                     WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'
                 """, (nome_tabela,)).fetchone() is not None
-        except Exception as e:
-            print(f"  ⚠️  Erro ao verificar existência da tabela: {e}")
+        except Exception:
+            logger.exception("Erro ao verificar existência da tabela %s", nome_tabela)
             return False
 
     def _indice_existe(self, nome_indice: str) -> bool:
         try:
             with get_db_connection(database_name='qstione') as conn:
                 return conn.execute("SELECT 1 FROM sys.indexes WHERE name = ?", (nome_indice,)).fetchone() is not None
-        except Exception as e:
-            print(f"  ⚠️  Erro ao verificar índice: {e}")
+        except Exception:
+            logger.exception("Erro ao verificar índice %s", nome_indice)
             return False
 
     def _criar_tabela(self):
         if self._tabela_existe('imp_006_usuarios'):
             return
-        print("🆕 Criando tabela imp_006_usuarios...")
+        logger.info("Criando tabela imp_006_usuarios")
         try:
             with get_db_connection(database_name='qstione') as conn:
                 conn.execute("""
@@ -62,113 +90,246 @@ class ImportadorUsuarios:
                     )
                 """)
                 conn.commit()
-            print("✅ Tabela criada.")
-        except Exception as e:
-            print(f"❌ Erro ao criar tabela: {e}")
-            return
-
-        if not self._indice_existe('idx_usuarios_email'):
-            try:
+            if not self._indice_existe('idx_usuarios_email'):
                 with get_db_connection(database_name='qstione') as conn:
                     conn.execute("CREATE INDEX idx_usuarios_email ON imp_006_usuarios(emailUsuario)")
                     conn.commit()
-            except Exception as e:
-                print(f"⚠️ Índice idx_usuarios_email não pôde ser criado: {e}")
+        except Exception:
+            logger.exception("Erro ao criar tabela/índice")
+
+    @staticmethod
+    def _curso_unificado(curso):
+        """Aplica o mesmo mapeamento de cursos do imp_002."""
+        if curso is None or str(curso).strip() == '':
+            return '999'
+        curso = str(curso).strip()
+        return MAPEAMENTO_CURSOS.get(curso, (curso, curso))[0]
+
+    def _diagnosticar_num_func(self, conn):
+        """Registra o caminho do NUM_FUNC de diagnóstico nas tabelas de origem."""
+        nf = DEBUG_NUM_FUNC
+        logger.info("===== DIAGNÓSTICO ESPECÍFICO NUM_FUNC=%s =====", nf)
+
+        queries = {
+            "1_td_ano_periodo": ("""
+                SELECT td.ano, td.periodo, td.turma, td.disciplina, td.num_func
+                FROM LY_TURMA_DOCENTE td
+                WHERE td.num_func = ?
+                ORDER BY td.ano, td.periodo, td.turma, td.disciplina
+            """, (nf,)),
+            "2_td_periodo_vigente": (f"""
+                SELECT td.ano, td.periodo, td.turma, td.disciplina, td.num_func
+                FROM LY_TURMA_DOCENTE td
+                WHERE td.num_func = ?
+                  AND td.ano = ?
+                  AND td.periodo IN ({self.periodos_placeholders})
+                ORDER BY td.ano, td.periodo, td.turma, td.disciplina
+            """, (nf, ANO_VIGENTE, *PERIODOS_VIGENTES)),
+            "3_td_com_turma": (f"""
+                SELECT td.ano, td.periodo, td.turma, td.disciplina, td.num_func,
+                       t.curso, t.sit_turma
+                FROM LY_TURMA_DOCENTE td
+                LEFT JOIN LY_TURMA t
+                  ON t.ano = td.ano
+                 AND t.semestre = td.periodo
+                 AND t.turma = td.turma
+                 AND t.disciplina = td.disciplina
+                WHERE td.num_func = ?
+                  AND td.ano = ?
+                  AND td.periodo IN ({self.periodos_placeholders})
+                ORDER BY td.ano, td.periodo, td.turma, td.disciplina
+            """, (nf, ANO_VIGENTE, *PERIODOS_VIGENTES)),
+            "4_turma_com_faculdade": (f"""
+                SELECT td.ano, td.periodo, td.turma, td.disciplina, td.num_func,
+                       t.curso, t.sit_turma, c.faculdade
+                FROM LY_TURMA_DOCENTE td
+                LEFT JOIN LY_TURMA t
+                  ON t.ano = td.ano
+                 AND t.semestre = td.periodo
+                 AND t.turma = td.turma
+                 AND t.disciplina = td.disciplina
+                LEFT JOIN LY_CURSO c ON c.curso = t.curso
+                WHERE td.num_func = ?
+                  AND td.ano = ?
+                  AND td.periodo IN ({self.periodos_placeholders})
+                ORDER BY td.ano, td.periodo, td.turma, td.disciplina
+            """, (nf, ANO_VIGENTE, *PERIODOS_VIGENTES)),
+            "5_docente": ("""
+                SELECT d.num_func, d.mailbox, d.nome_social, d.nome_compl
+                FROM LY_DOCENTE d
+                WHERE d.num_func = ?
+            """, (nf,)),
+        }
+
+        for nome, (sql, params) in queries.items():
+            try:
+                rows = conn.execute(sql, params).fetchall()
+                logger.info("[%s] quantidade=%d", nome, len(rows))
+                for row in rows:
+                    logger.info("[%s] %s", nome, row)
+            except Exception:
+                logger.exception("[%s] ERRO", nome)
+
+        logger.info("===== FIM DIAGNÓSTICO NUM_FUNC=%s =====", nf)
 
     def obter_dados_lyceum(self):
-        """Usa a mesma população docente do imp_007_usuarios_cursos."""
-        periodo_principal = PERIODOS_VIGENTES[0]
+        """
+        A população vem exclusivamente de LY_TURMA_DOCENTE/NUM_FUNC.
+        Não há filtro por matrícula nem por ativo em LY_DOCENTE.
+        """
+        query = f"""
+            SELECT DISTINCT
+                td.num_func,
+                d.mailbox,
+                COALESCE(d.nome_social, d.nome_compl) AS nome_completo,
+                d.cpf,
+                t.curso
+            FROM LY_TURMA_DOCENTE td
+            INNER JOIN LY_TURMA t
+                ON t.ano = td.ano
+               AND t.semestre = td.periodo
+               AND t.turma = td.turma
+               AND t.disciplina = td.disciplina
+            LEFT JOIN LY_CURSO c
+                ON c.curso = t.curso
+            INNER JOIN LY_DOCENTE d
+                ON d.num_func = td.num_func
+            WHERE td.ano = ?
+              AND td.periodo IN ({self.periodos_placeholders})
+              AND t.sit_turma = ?
+              AND (
+                    t.curso IS NULL
+                    OR c.faculdade IN ({self.faculdades_placeholders})
+                  )
+            ORDER BY td.num_func
+        """
+
+        params = (
+            ANO_VIGENTE,
+            *PERIODOS_VIGENTES,
+            SITUACAO_TURMA_VALIDA,
+            *FACULDADES_INCLUIDAS,
+        )
+
         with get_db_connection() as conn:
+            self._diagnosticar_num_func(conn)
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT
-                    MAX(d.matricula) AS matricula,
-                    MAX(d.mailbox) AS email,
-                    MAX(COALESCE(d.nome_social, d.nome_compl)) AS nome_completo,
-                    d.cpf
-                FROM LY_DOCENTE d
-                INNER JOIN (
-                    SELECT DISTINCT td.num_func
-                    FROM LY_TURMA_DOCENTE td
-                    INNER JOIN LY_GRADE g ON g.disciplina = td.disciplina
-                    WHERE td.ano = ? AND td.periodo = ?
-                ) elegivel ON elegivel.num_func = d.num_func
-                WHERE d.ativo = 'S'
-                  AND d.mailbox IS NOT NULL
-                  AND LTRIM(RTRIM(d.mailbox)) <> ''
-                GROUP BY d.cpf
-                ORDER BY MAX(d.matricula)
-            """, (ANO_VIGENTE, periodo_principal))
-            return cursor.fetchall()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            logger.info("CONSULTA FINAL: %d linhas retornadas", len(rows))
+            debug_rows = [r for r in rows if str(r[0]).strip() == DEBUG_NUM_FUNC]
+            logger.info("CONSULTA FINAL NUM_FUNC=%s: %d linhas", DEBUG_NUM_FUNC, len(debug_rows))
+            for row in debug_rows:
+                logger.info("CONSULTA FINAL NUM_FUNC=%s ROW=%s", DEBUG_NUM_FUNC, row)
+            return rows
 
     def transformar_dados(self, dados_lyceum):
-        dados_transformados = []
-        for matricula, email, nome, cpf in dados_lyceum:
-            if not validar_matricula(matricula):
-                print(f"  ⚠️  Matrícula inválida: {matricula}")
-                continue
+        """Monta um usuário por NUM_FUNC, sem exigir matrícula ou ativo."""
+        registros = {}
+
+        for num_func, email, nome, cpf, curso in dados_lyceum:
+            nf = str(num_func).strip()
+            if nf == DEBUG_NUM_FUNC:
+                logger.info(
+                    "TRANSFORMANDO NUM_FUNC=%s | email=%s | nome=%s | curso=%s",
+                    nf, email, nome, curso
+                )
+
             if not validar_email(email):
-                print(f"  ⚠️  Email inválido: {email}")
+                if nf == DEBUG_NUM_FUNC:
+                    logger.warning("EXCLUIDO NUM_FUNC=%s: email inválido (%r)", nf, email)
                 continue
             if not validar_nome(nome):
-                print(f"  ⚠️  Nome inválido: {nome}")
+                if nf == DEBUG_NUM_FUNC:
+                    logger.warning("EXCLUIDO NUM_FUNC=%s: nome inválido (%r)", nf, nome)
                 continue
-            email_final = converter_minusculas(email)
+
+            email_final = converter_minusculas(email)[:100]
             codigo_usuario = extrair_usuario_email(email)
-            dados_transformados.append({
-                'matriculaUsuario': str(matricula)[:20],
-                'codigoUsuario': codigo_usuario[:24] if codigo_usuario else None,
-                'emailUsuario': email_final[:100],
-                'nomeUsuario': truncar_texto(nome, 64)
-            })
-        return dados_transformados
+
+            # Como a matrícula deixou de participar da origem, o NUM_FUNC passa
+            # a ser a chave do usuário importado.
+            if nf not in registros:
+                registros[nf] = {
+                    'matriculaUsuario': nf[:20],
+                    'codigoUsuario': codigo_usuario[:24] if codigo_usuario else None,
+                    'emailUsuario': email_final,
+                    'nomeUsuario': truncar_texto(nome, 64),
+                }
+                if nf == DEBUG_NUM_FUNC:
+                    logger.info("INCLUÍDO NUM_FUNC=%s como matriculaUsuario=%s", nf, nf[:20])
+
+        logger.info("TRANSFORMAÇÃO FINAL: %d usuários únicos", len(registros))
+        return list(registros.values())
 
     def importar_para_qstione(self, dados_transformados):
         self._criar_tabela()
-        merge_sql = """
-            MERGE INTO imp_006_usuarios AS target
-            USING (VALUES (?, ?, ?, ?)) AS source (matriculaUsuario, codigoUsuario, emailUsuario, nomeUsuario)
-            ON target.matriculaUsuario = source.matriculaUsuario
-            WHEN MATCHED THEN UPDATE SET
-                codigoUsuario = source.codigoUsuario,
-                emailUsuario = source.emailUsuario,
-                nomeUsuario = source.nomeUsuario,
-                data_atualizacao = GETDATE()
-            WHEN NOT MATCHED THEN
-                INSERT (matriculaUsuario, codigoUsuario, emailUsuario, nomeUsuario, data_criacao, data_atualizacao)
-                VALUES (source.matriculaUsuario, source.codigoUsuario, source.emailUsuario, source.nomeUsuario, GETDATE(), GETDATE());
-        """
-        inseridos = atualizados = erros = 0
-        with get_db_connection(database_name='qstione') as conn:
-            cursor = conn.cursor()
-            for reg in dados_transformados:
-                try:
-                    cursor.execute("SELECT 1 FROM imp_006_usuarios WHERE matriculaUsuario = ?", (reg['matriculaUsuario'],))
-                    existe = cursor.fetchone()
-                    cursor.execute(merge_sql, (reg['matriculaUsuario'], reg['codigoUsuario'], reg['emailUsuario'], reg['nomeUsuario']))
-                    atualizados += 1 if existe else 0
-                    inseridos += 0 if existe else 1
-                except Exception as e:
-                    erros += 1
-                    print(f"  ✗  Erro ao importar {reg['matriculaUsuario']}: {e}")
-            conn.commit()
-        return {'total_inseridos': inseridos, 'total_atualizados': atualizados, 'total_erros': erros, 'total_processados': len(dados_transformados)}
+        inseridos = erros = 0
+
+        try:
+            with get_db_connection(database_name='qstione') as conn:
+                conn.execute("DELETE FROM imp_006_usuarios")
+                cursor = conn.cursor()
+
+                for reg in dados_transformados:
+                    try:
+                        cursor.execute("""
+                            INSERT INTO imp_006_usuarios
+                            (matriculaUsuario, codigoUsuario, emailUsuario, nomeUsuario,
+                             data_criacao, data_atualizacao)
+                            VALUES (?, ?, ?, ?, GETDATE(), GETDATE())
+                        """, (
+                            reg['matriculaUsuario'],
+                            reg['codigoUsuario'],
+                            reg['emailUsuario'],
+                            reg['nomeUsuario'],
+                        ))
+                        inseridos += 1
+                    except Exception:
+                        erros += 1
+                        logger.exception("Erro ao importar matriculaUsuario=%s", reg['matriculaUsuario'])
+
+                conn.commit()
+        except Exception:
+            logger.exception("Erro durante reconstrução da tabela")
+            return {
+                'total_inseridos': 0,
+                'total_atualizados': 0,
+                'total_erros': len(dados_transformados),
+                'total_processados': len(dados_transformados),
+            }
+
+        return {
+            'total_inseridos': inseridos,
+            'total_atualizados': 0,
+            'total_erros': erros,
+            'total_processados': len(dados_transformados),
+        }
 
     def executar_importacao(self):
         print("=" * 70)
         print("IMPORTAÇÃO: imp_006_usuarios")
         print("=" * 70)
-        print(f"🎓 Docentes habilitados: ano={ANO_VIGENTE}, período={PERIODOS_VIGENTES[0]}")
+        print(
+            f"🎓 Docentes por LY_TURMA_DOCENTE: ano={ANO_VIGENTE}, "
+            f"períodos={PERIODOS_VIGENTES}, faculdades={FACULDADES_INCLUIDAS}"
+        )
+        print(f"🔎 Log detalhado: {LOG_FILE}")
+
         dados = self.obter_dados_lyceum()
-        print(f"📊 Registros encontrados: {len(dados)}")
+        num_funcs = {str(row[0]).strip() for row in dados if row[0] is not None}
+        print(f"📊 Registros de vínculos encontrados: {len(dados)}")
+        print(f"👨‍🏫 NUM_FUNC únicos elegíveis: {len(num_funcs)}")
+        print(f"🔎 NUM_FUNC {DEBUG_NUM_FUNC} na consulta final: {'SIM' if DEBUG_NUM_FUNC in num_funcs else 'NÃO'}")
+
         transformados = self.transformar_dados(dados)
-        print(f"✅ Registros válidos: {len(transformados)}")
+        print(f"✅ Usuários únicos válidos: {len(transformados)}")
+
         resultado = self.importar_para_qstione(transformados)
-        print(f"📈 Inseridos: {resultado['total_inseridos']} | Atualizados: {resultado['total_atualizados']} | Erros: {resultado['total_erros']}")
+        print(f"📈 Inseridos: {resultado['total_inseridos']} | Erros: {resultado['total_erros']}")
+        logger.info("FIM imp_006_usuarios")
         return transformados
 
 
 if __name__ == "__main__":
-    import logging
-    logging.basicConfig(level=logging.INFO)
     ImportadorUsuarios().executar_importacao()
