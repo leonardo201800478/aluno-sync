@@ -5,6 +5,7 @@ Importador independente para imp_007_usuarios_cursos.
 O código de curso segue exatamente o mapeamento utilizado por
 imp_002_disciplina.py. A tabela destino é limpa antes de cada carga.
 O e-mail do docente é sempre obtido de LY_DOCENTE.mailbox.
+Somente cursos pertencentes às faculdades configuradas são considerados.
 """
 
 import os
@@ -17,12 +18,15 @@ if ROOT not in sys.path:
 from core.database import get_db_connection
 from qstione.core.transformacoes import converter_minusculas, determinar_papel_usuario
 from qstione.core.validacoes import validar_codigo_curso, validar_email, validar_papel_usuario
-from qstione.config.filtros import ANO_VIGENTE, PERIODOS_VIGENTES
+from qstione.config.filtros import ANO_VIGENTE, PERIODOS_VIGENTES, FACULDADES_INCLUIDAS
 from qstione.importadores.imp_002_disciplina import MAPEAMENTO_CURSOS
 
 
 class ImportadorUsuariosCursos:
     """Importa professores/coordenadores por curso usando o código de curso unificado."""
+
+    def __init__(self):
+        self.faculdades_placeholders = ','.join(['?'] * len(FACULDADES_INCLUIDAS))
 
     def _tabela_existe(self, nome_tabela: str) -> bool:
         try:
@@ -81,26 +85,61 @@ class ImportadorUsuariosCursos:
 
     def obter_coordenadores(self):
         with get_db_connection() as conn:
-            rows = conn.execute("SELECT DISTINCT num_func, curso FROM LY_COORDENACAO").fetchall()
+            rows = conn.execute("""
+                SELECT DISTINCT co.num_func, co.curso
+                FROM LY_COORDENACAO co
+                INNER JOIN LY_CURSO c
+                    ON c.curso = co.curso
+                WHERE c.faculdade IN ({})
+            """.format(self.faculdades_placeholders), FACULDADES_INCLUIDAS).fetchall()
+
         coordenadores = {}
         for num_func, curso in rows:
             curso = self._curso_unificado(curso)
             coordenadores[(str(num_func), str(curso))] = True
-        print(f"📋 Coordenadores encontrados: {len(coordenadores)}")
+
+        print(f"📋 Coordenadores encontrados nas faculdades filtradas: {len(coordenadores)}")
         return coordenadores
 
     def obter_dados_lyceum(self):
+        """
+        Retorna somente vínculos docente/curso cujo curso pertence a uma
+        faculdade presente em FACULDADES_INCLUIDAS.
+
+        O curso é obtido de LY_TURMA.curso, pois a turma é a origem do
+        vínculo docente. LY_GRADE é usada apenas para complementar a
+        relação quando necessário, não para determinar o curso.
+        """
         coordenadores = self.obter_coordenadores()
         periodo_principal = PERIODOS_VIGENTES[0]
+
         with get_db_connection() as conn:
             rows = conn.execute("""
-                SELECT DISTINCT td.num_func, d.mailbox, g.curso
+                SELECT DISTINCT
+                    td.num_func,
+                    d.mailbox,
+                    t.curso
                 FROM LY_TURMA_DOCENTE td
-                INNER JOIN LY_GRADE g ON g.disciplina = td.disciplina
-                INNER JOIN LY_DOCENTE d ON d.num_func = td.num_func
-                WHERE td.ano = ? AND td.periodo = ? AND d.ativo = 'S'
-                ORDER BY td.num_func, g.curso
-            """, (ANO_VIGENTE, periodo_principal)).fetchall()
+                INNER JOIN LY_TURMA t
+                    ON t.ano = td.ano
+                   AND t.semestre = td.periodo
+                   AND t.turma = td.turma
+                   AND t.disciplina = td.disciplina
+                INNER JOIN LY_CURSO c
+                    ON c.curso = t.curso
+                INNER JOIN LY_DOCENTE d
+                    ON d.num_func = td.num_func
+                WHERE td.ano = ?
+                  AND td.periodo = ?
+                  AND c.faculdade IN ({})
+                  AND d.ativo = 'S'
+                ORDER BY td.num_func, t.curso
+            """.format(self.faculdades_placeholders), (
+                ANO_VIGENTE,
+                periodo_principal,
+                *FACULDADES_INCLUIDAS,
+            )).fetchall()
+
         return rows, coordenadores
 
     def transformar_dados(self, dados_lyceum, coordenadores):
@@ -156,6 +195,7 @@ class ImportadorUsuariosCursos:
         print('=' * 70)
         print('IMPORTAÇÃO: imp_007_usuarios_cursos')
         print('=' * 70)
+        print(f'🎓 Ano: {ANO_VIGENTE} | Período: {PERIODOS_VIGENTES[0]} | Faculdades: {FACULDADES_INCLUIDAS}')
         dados, coordenadores = self.obter_dados_lyceum()
         print(f'📊 Registros encontrados: {len(dados)}')
         transformados = self.transformar_dados(dados, coordenadores)
