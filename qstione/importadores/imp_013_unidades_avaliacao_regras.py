@@ -84,29 +84,21 @@ ENGENHARIAS
     S2P1
     S2P2
 
-MEDICINA - CURRÍCULOS NOVOS
-    PV1
-    PV2
-    PV3
-    PV4
-    SUBS
-    PV1-D/A
-    PV2-D/A
-    PV3-D/A
-    PV4-D/A
-    SUBS-D/A
-    SI
+MEDICINA - CURRÍCULOS NOVOS (20231, 20251, 20261)
+    S1 - Somativa 1
+    S2 - Somativa 2
+    SUBS - Prova Substitutiva
+    S1-D/A - Prova 1 Adap-Dep
+    S2-D/A - Prova 2 Adap-Dep
+    SUBS-D/A - Prova Substitutiva Adap-Dep
+    SI - Simulado
 
-MEDICINA - CURRÍCULO ANTIGO
-    F1
-    F2
-    F3
-    S1
-    S2
-    SC
-    PF
-    PE
-    SI
+MEDICINA - CURRÍCULO ANTIGO (20152, Modular)
+    PM - Prova Módulo
+    SC - Segunda Chamada
+    PF - Prova Final
+    PE - Prova Especial
+    SI - Simulado
 
 MEDICINA
 --------
@@ -291,30 +283,22 @@ AVALIACOES_ENGENHARIA: Tuple[Tuple[int, str, str], ...] = (
 
 
 AVALIACOES_MEDICINA_NOVO: Tuple[Tuple[int, str, str], ...] = (
-    (1, "-PV1", "Prova 1"),
-    (2, "-PV2", "Prova 2"),
-    (3, "-PV3", "Prova 3"),
-    (4, "-PV4", "Prova 4"),
-    (5, "-SUBS", "Substitutiva"),
-    (6, "-PV1-D/A", "Prova 1 Adap-Dep"),
-    (7, "-PV2-D/A", "Prova 2 Adap-Dep"),
-    (8, "-PV3-D/A", "Prova 3 Adap-Dep"),
-    (9, "-PV4-D/A", "Prova 4 Adap-Dep"),
-    (10, "-SUBS-D/A", "Substitutiva"),
-    (11, "-SI", "Simulado"),
+    (1, "-S1", "Somativa 1"),
+    (2, "-S2", "Somativa 2"),
+    (3, "-SUBS", "Prova Substitutiva"),
+    (4, "-S1-D/A", "Prova 1 Adap-Dep"),
+    (5, "-S2-D/A", "Prova 2 Adap-Dep"),
+    (6, "-SUBS-D/A", "Prova Substitutiva Adap-Dep"),
+    (7, "-SI", "Simulado"),
 )
 
 
 AVALIACOES_MEDICINA_ANTIGO: Tuple[Tuple[int, str, str], ...] = (
-    (1, "-F1", "Formativa 1"),
-    (2, "-F2", "Formativa 2"),
-    (3, "-F3", "Formativa 3"),
-    (4, "-S1", "Somativa 1"),
-    (5, "-S2", "Somativa 2"),
-    (6, "-SC", "Segunda Chamada"),
-    (7, "-PF", "Prova Final"),
-    (8, "-PE", "Prova Especial"),
-    (9, "-SI", "Simulado"),
+    (1, "-PM", "Prova Módulo"),
+    (2, "-SC", "Segunda Chamada"),
+    (3, "-PF", "Prova Final"),
+    (4, "-PE", "Prova Especial"),
+    (5, "-SI", "Simulado"),
 )
 
 
