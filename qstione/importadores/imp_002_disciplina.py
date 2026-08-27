@@ -1,76 +1,69 @@
-#!/usr/bin/env python3
-# qstione/importadores/imp_002_disciplina.py
-
 """
-Importador independente para imp_002_disciplina.
+qstione/importadores/imp_002_disciplina.py
 
-FONTE DE VERDADE
-----------------
-A unidade de origem é a TURMA existente em LY_TURMA.
+Importador independente de disciplinas para o Qstione.
 
-    LY_TURMA
-       |
-       +-- disciplina
-       |
-       +-- curso
-       |
-       +-- ano
-       |
-       +-- semestre
-       |
-       +-- situação
-       |
-       +-- turma
-       |
-       +-- LY_CURSO.faculdade
-       |
-       +-- LY_DISCIPLINA
-       |
-       +-- LY_GRADE
-
-REGRAS DE NEGÓCIO
+REGRAS PRINCIPAIS
 -----------------
 
-1. A existência da disciplina no importador NÃO depende de:
-       - LY_MATRICULA
-       - LY_ALUNO
-       - LY_TURMA_DOCENTE
+1. LY_TURMA é a fonte de verdade para determinar quais disciplinas
+   devem ser importadas.
 
-   Basta existir uma turma válida em LY_TURMA.
+2. Somente são consideradas turmas:
+       - do ANO_VIGENTE;
+       - dos PERIODOS_VIGENTES;
+       - com SITUACAO_TURMA_VALIDA;
+       - pertencentes às FACULDADES_INCLUIDAS.
 
-2. A turma deve pertencer a:
-       ANO_VIGENTE
-       PERIODOS_VIGENTES
-       SITUACAO_TURMA_VALIDA
+3. O curso ORIGINAL da LY_TURMA é preservado durante todo o
+   processamento.
 
-3. O curso é SEMPRE obtido de:
-       LY_TURMA.curso
+4. Cursos NULL, vazios ou 999 representam COMPARTILHADA.
 
-   Nunca:
-       LY_MATRICULA.curso
-       LY_GRADE.curso
-       LY_DISCIPLINA.curso
+5. Para cursos reais, a faculdade é validada através de LY_CURSO.
 
-4. Quando LY_TURMA.curso for NULL ou vazio:
+6. LY_GRADE é utilizada somente para descobrir o menor período/série
+   aplicável à disciplina.
 
-       curso = 999
-       nome_curso = COMPARTILHADA
+7. A consulta de LY_GRADE utiliza SEMPRE o código ORIGINAL do curso.
 
-   A turma continua válida mesmo sem curso.
+   Exemplo:
 
-5. Quando LY_TURMA.curso estiver preenchido:
+       LY_TURMA.curso = 141
 
-       LY_TURMA.curso
-            |
-            v
-       LY_CURSO.faculdade
+       consulta:
+           LY_GRADE.curso = 141
 
-   A faculdade precisa estar em:
-       FACULDADES_INCLUIDAS
+   Somente depois disso:
 
-6. A disciplina é identificada pelo contexto da própria turma.
+       141 -> 056
 
-7. O código final da disciplina é gerado por:
+   através do MAPEAMENTO_CURSOS.
+
+8. Caso existam vários registros de LY_GRADE para a mesma combinação
+   curso original + disciplina, será utilizada a menor série.
+
+9. A disciplina é identificada juntamente com o CONTEXTO DE CURSO.
+
+   Portanto:
+
+       DISC001 + 999
+       DISC001 + 056
+
+   são contextos diferentes e ambos podem existir.
+
+10. Cursos que possuem códigos alternativos continuam sendo consultados
+    individualmente na LY_GRADE antes da unificação.
+
+    Exemplo:
+
+       056 -> 056
+       141 -> 056
+
+    Uma turma 056 consulta a grade 056.
+    Uma turma 141 consulta a grade 141.
+
+11. O código da disciplina é gerado com:
 
        gerar_codigo_disciplina_curso(
            disciplina,
@@ -78,35 +71,9 @@ REGRAS DE NEGÓCIO
            curso_unificado
        )
 
-8. Cursos duplicados/alternativos são unificados por
-   MAPEAMENTO_CURSOS.
+12. A tabela destino é reconstruída a cada execução.
 
-9. LY_GRADE é utilizada somente para obter serie_ideal,
-   usando o curso REAL da turma.
-
-10. Para turma compartilhada (curso 999), não existe curso
-    real para relacionar com LY_GRADE. Nesse caso, o período
-    será obtido somente se houver uma informação aplicável;
-    caso contrário, será utilizado 1.
-
-11. A área de conhecimento da disciplina é utilizada como
-    filtro.
-
-    Áreas:
-       - presentes em AREAS_CONHECIMENTO_INCLUIDAS
-       - NULL
-       - vazia
-
-    são aceitas.
-
-12. Cada execução reconstrói integralmente a tabela:
-
-       DELETE FROM imp_002_disciplina
-
-    antes dos novos INSERTs.
-
-13. O arquivo pode ser executado diretamente pelo botão
-    Play do VS Code.
+13. O arquivo pode ser executado diretamente pelo botão PLAY do VS Code.
 """
 
 import os
@@ -115,7 +82,7 @@ import logging
 
 
 # =============================================================================
-# PATH
+# PATH DO PROJETO
 # =============================================================================
 
 ROOT = os.path.dirname(
@@ -137,158 +104,251 @@ if ROOT not in sys.path:
 from core.database import get_db_connection
 
 from qstione.core.transformacoes import (
+    truncar_texto,
     converter_inteiro,
     gerar_codigo_disciplina_curso,
-    truncar_texto,
-)
-
-from qstione.core.validacoes import (
-    validar_codigo_disciplina,
-    validar_codigo_curso,
 )
 
 from qstione.config.filtros import (
     ANO_VIGENTE,
     PERIODOS_VIGENTES,
     FACULDADES_INCLUIDAS,
-    AREAS_CONHECIMENTO_INCLUIDAS,
     SITUACAO_TURMA_VALIDA,
 )
-
-
-# =============================================================================
-# MAPEAMENTO DE CURSOS
-# =============================================================================
-#
-# ESTE MAPEAMENTO É A FONTE CENTRAL DOS CÓDIGOS UNIFICADOS.
-#
-# Os demais importadores devem importar MAPEAMENTO_CURSOS deste arquivo
-# em vez de criar seus próprios mapeamentos.
-#
-# =============================================================================
-
-MAPEAMENTO_CURSOS = {
-    "034": ("034", "ADMINISTRAÇÃO"),
-
-    "064": ("064", "CIÊNCIAS BIOLÓGICAS"),
-    "062": ("064", "CIÊNCIAS BIOLÓGICAS"),
-    "057": ("064", "CIÊNCIAS BIOLÓGICAS"),
-
-    "009": ("009", "CIÊNCIAS CONTÁBEIS"),
-    "023": ("009", "CIÊNCIAS CONTÁBEIS"),
-
-    "055": (
-        "055",
-        "CURSO SUPERIOR DE TECNOLOGIA EM GESTÃO DE RECURSOS HUMANOS",
-    ),
-
-    "056": ("056", "DESIGN"),
-    "141": ("056", "DESIGN"),
-
-    "031": ("031", "DIREITO"),
-
-    "065": ("065", "EDUCAÇÃO FÍSICA"),
-    "036": ("065", "EDUCAÇÃO FÍSICA"),
-    "037": ("065", "EDUCAÇÃO FÍSICA"),
-
-    "013": ("013", "ENFERMAGEM"),
-
-    "079": ("079", "ENGENHARIA"),
-
-    "006": ("006", "ENGENHARIA CIVIL"),
-    "020": ("006", "ENGENHARIA CIVIL"),
-
-    "097": ("097", "ENGENHARIA DA COMPUTAÇÃO"),
-
-    "059": ("059", "ENGENHARIA DE PRODUÇÃO"),
-    "142": ("059", "ENGENHARIA DE PRODUÇÃO"),
-
-    "044": ("044", "ENGENHARIA ELÉTRICA"),
-    "139": ("044", "ENGENHARIA ELÉTRICA"),
-
-    "017": ("017", "ENGENHARIA MECÂNICA"),
-    "132": ("017", "ENGENHARIA MECÂNICA"),
-
-    "126": ("126", "FARMÁCIA"),
-
-    "060": ("060", "JORNALISMO"),
-
-    "014": ("014", "MEDICINA"),
-
-    "024": ("024", "NUTRIÇÃO"),
-
-    "007": ("007", "ODONTOLOGIA"),
-    "130": ("007", "ODONTOLOGIA"),
-
-    "128": ("128", "PEDAGOGIA"),
-
-    "145": ("145", "PSICOLOGIA"),
-
-    "061": ("061", "PUBLICIDADE E PROPAGANDA"),
-
-    "025": ("025", "SERVIÇO SOCIAL"),
-
-    "019": ("019", "SISTEMAS DE INFORMAÇÃO"),
-
-    "999": ("999", "COMPARTILHADA"),
-}
 
 
 # =============================================================================
 # LOG
 # =============================================================================
 
-LOG_DIR = os.path.join(
-    ROOT,
-    "logs",
-)
-
-os.makedirs(
-    LOG_DIR,
-    exist_ok=True,
-)
-
-LOG_FILE = os.path.join(
-    LOG_DIR,
-    "imp_002_disciplina.log",
-)
-
 logger = logging.getLogger(
     "imp_002_disciplina"
 )
 
-logger.setLevel(
-    logging.DEBUG
-)
+if not logger.handlers:
 
-logger.handlers.clear()
+    handler = logging.StreamHandler()
 
-file_handler = logging.FileHandler(
-    LOG_FILE,
-    encoding="utf-8",
-)
-
-file_handler.setFormatter(
-    logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(message)s"
+        )
     )
+
+    logger.addHandler(
+        handler
+    )
+
+logger.setLevel(
+    logging.INFO
 )
 
-logger.addHandler(
-    file_handler
-)
 
-logger.propagate = False
+# =============================================================================
+# MAPEAMENTO DE CURSOS
+# =============================================================================
+
+MAPEAMENTO_CURSOS = {
+
+    "034": (
+        "034",
+        "ADMINISTRAÇÃO"
+    ),
+
+    "064": (
+        "064",
+        "CIÊNCIAS BIOLÓGICAS"
+    ),
+
+    "062": (
+        "064",
+        "CIÊNCIAS BIOLÓGICAS"
+    ),
+
+    "057": (
+        "064",
+        "CIÊNCIAS BIOLÓGICAS"
+    ),
+
+    "009": (
+        "009",
+        "CIÊNCIAS CONTÁBEIS"
+    ),
+
+    "023": (
+        "009",
+        "CIÊNCIAS CONTÁBEIS"
+    ),
+
+    "055": (
+        "055",
+        "CURSO SUPERIOR DE TECNOLOGIA EM GESTÃO DE RECURSOS HUMANOS"
+    ),
+
+    "056": (
+        "056",
+        "DESIGN"
+    ),
+
+    "141": (
+        "056",
+        "DESIGN"
+    ),
+
+    "031": (
+        "031",
+        "DIREITO"
+    ),
+
+    "065": (
+        "065",
+        "EDUCAÇÃO FÍSICA"
+    ),
+
+    "036": (
+        "065",
+        "EDUCAÇÃO FÍSICA"
+    ),
+
+    "037": (
+        "065",
+        "EDUCAÇÃO FÍSICA"
+    ),
+
+    "013": (
+        "013",
+        "ENFERMAGEM"
+    ),
+
+    "079": (
+        "079",
+        "ENGENHARIA"
+    ),
+
+    "006": (
+        "006",
+        "ENGENHARIA CIVIL"
+    ),
+
+    "020": (
+        "006",
+        "ENGENHARIA CIVIL"
+    ),
+
+    "097": (
+        "097",
+        "ENGENHARIA DA COMPUTAÇÃO"
+    ),
+
+    "059": (
+        "059",
+        "ENGENHARIA DE PRODUÇÃO"
+    ),
+
+    "142": (
+        "059",
+        "ENGENHARIA DE PRODUÇÃO"
+    ),
+
+    "044": (
+        "044",
+        "ENGENHARIA ELÉTRICA"
+    ),
+
+    "139": (
+        "044",
+        "ENGENHARIA ELÉTRICA"
+    ),
+
+    "017": (
+        "017",
+        "ENGENHARIA MECÂNICA"
+    ),
+
+    "132": (
+        "017",
+        "ENGENHARIA MECÂNICA"
+    ),
+
+    "126": (
+        "126",
+        "FARMÁCIA"
+    ),
+
+    "060": (
+        "060",
+        "JORNALISMO"
+    ),
+
+    "014": (
+        "014",
+        "MEDICINA"
+    ),
+
+    "024": (
+        "024",
+        "NUTRIÇÃO"
+    ),
+
+    "007": (
+        "007",
+        "ODONTOLOGIA"
+    ),
+
+    "130": (
+        "007",
+        "ODONTOLOGIA"
+    ),
+
+    "128": (
+        "128",
+        "PEDAGOGIA"
+    ),
+
+    "145": (
+        "145",
+        "PSICOLOGIA"
+    ),
+
+    "061": (
+        "061",
+        "PUBLICIDADE E PROPAGANDA"
+    ),
+
+    "025": (
+        "025",
+        "SERVIÇO SOCIAL"
+    ),
+
+    "019": (
+        "019",
+        "SISTEMAS DE INFORMAÇÃO"
+    ),
+
+    "999": (
+        "999",
+        "COMPARTILHADA"
+    ),
+}
+
+
+# =============================================================================
+# CONSTANTES
+# =============================================================================
+
+CURSO_COMPARTILHADO = "999"
 
 
 # =============================================================================
 # IMPORTADOR
 # =============================================================================
 
-class ImportadorDisciplinas:
+class ImportadorDisciplina:
     """
-    Importador de disciplinas baseado nas turmas reais do Lyceum.
+    Importador de disciplinas do Lyceum para o Qstione.
+
+    A seleção parte de LY_TURMA. As tabelas complementares não podem
+    eliminar uma turma já considerada válida.
     """
 
     def __init__(self):
@@ -301,108 +361,20 @@ class ImportadorDisciplinas:
             "?" for _ in FACULDADES_INCLUIDAS
         )
 
-        self.areas = [
-            area
-            for area in AREAS_CONHECIMENTO_INCLUIDAS
-            if area not in (None, "")
-        ]
-
-        self.areas_placeholders = ",".join(
-            "?" for _ in self.areas
+        logger.info(
+            "=" * 90
         )
-
-        logger.info("=" * 90)
 
         logger.info(
             "INÍCIO imp_002_disciplina"
         )
 
         logger.info(
-            "ANO_VIGENTE=%s",
-            ANO_VIGENTE
-        )
-
-        logger.info(
-            "PERIODOS_VIGENTES=%s",
-            PERIODOS_VIGENTES
-        )
-
-        logger.info(
-            "FACULDADES_INCLUIDAS=%s",
-            FACULDADES_INCLUIDAS
-        )
-
-        logger.info(
-            "AREAS_CONHECIMENTO_INCLUIDAS=%s",
-            AREAS_CONHECIMENTO_INCLUIDAS
-        )
-
-        logger.info(
-            "SITUACAO_TURMA_VALIDA=%s",
-            SITUACAO_TURMA_VALIDA
-        )
-
-        logger.info(
-            "LOG_FILE=%s",
-            LOG_FILE
-        )
-
-    # =========================================================================
-    # NORMALIZAÇÃO DE CURSO
-    # =========================================================================
-
-    @staticmethod
-    def normalizar_curso(curso):
-        """
-        Normaliza o código do curso utilizando MAPEAMENTO_CURSOS.
-
-        Parameters
-        ----------
-        curso:
-            Código original de LY_TURMA.curso.
-
-        Returns
-        -------
-        tuple[str, str]
-            Código e nome do curso unificado.
-
-        Examples
-        --------
-        020 -> 006 / ENGENHARIA CIVIL
-
-        062 -> 064 / CIÊNCIAS BIOLÓGICAS
-
-        NULL -> 999 / COMPARTILHADA
-        """
-
-        if curso is None:
-            return (
-                "999",
-                "COMPARTILHADA",
-            )
-
-        curso = str(curso).strip()
-
-        if not curso:
-            return (
-                "999",
-                "COMPARTILHADA",
-            )
-
-        if curso in MAPEAMENTO_CURSOS:
-
-            curso_unificado, nome_curso = (
-                MAPEAMENTO_CURSOS[curso]
-            )
-
-            return (
-                str(curso_unificado),
-                str(nome_curso),
-            )
-
-        return (
-            curso,
-            curso,
+            "ANO=%s | PERIODOS=%s | FACULDADES=%s | SIT_TURMA=%s",
+            ANO_VIGENTE,
+            PERIODOS_VIGENTES,
+            FACULDADES_INCLUIDAS,
+            SITUACAO_TURMA_VALIDA,
         )
 
     # =========================================================================
@@ -411,11 +383,8 @@ class ImportadorDisciplinas:
 
     def _tabela_existe(
         self,
-        nome_tabela: str,
-    ) -> bool:
-        """
-        Verifica se uma tabela existe no banco Qstione.
-        """
+        nome_tabela
+    ):
 
         try:
 
@@ -423,25 +392,25 @@ class ImportadorDisciplinas:
                 database_name="qstione"
             ) as conn:
 
-                return (
-                    conn.execute(
-                        """
-                        SELECT 1
-                        FROM INFORMATION_SCHEMA.TABLES
-                        WHERE TABLE_NAME = ?
-                          AND TABLE_TYPE = 'BASE TABLE'
-                        """,
-                        (nome_tabela,),
-                    ).fetchone()
-                    is not None
-                )
+                row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_NAME = ?
+                      AND TABLE_TYPE = 'BASE TABLE'
+                    """,
+                    (
+                        nome_tabela,
+                    )
+                ).fetchone()
 
-        except Exception as e:
+                return row is not None
 
-            logger.warning(
-                "Erro verificando tabela %s: %s",
-                nome_tabela,
-                e,
+        except Exception:
+
+            logger.exception(
+                "Erro verificando tabela %s",
+                nome_tabela
             )
 
             return False
@@ -452,11 +421,8 @@ class ImportadorDisciplinas:
 
     def _indice_existe(
         self,
-        nome_indice: str,
-    ) -> bool:
-        """
-        Verifica se um índice existe.
-        """
+        nome_indice
+    ):
 
         try:
 
@@ -464,25 +430,20 @@ class ImportadorDisciplinas:
                 database_name="qstione"
             ) as conn:
 
-                return (
-                    conn.execute(
-                        """
-                        SELECT 1
-                        FROM sys.indexes
-                        WHERE name = ?
-                        """,
-                        (nome_indice,),
-                    ).fetchone()
-                    is not None
-                )
+                row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM sys.indexes
+                    WHERE name = ?
+                    """,
+                    (
+                        nome_indice,
+                    )
+                ).fetchone()
 
-        except Exception as e:
+                return row is not None
 
-            logger.warning(
-                "Erro verificando índice %s: %s",
-                nome_indice,
-                e,
-            )
+        except Exception:
 
             return False
 
@@ -491,16 +452,13 @@ class ImportadorDisciplinas:
     # =========================================================================
 
     def _criar_tabela(self):
-        """
-        Cria a tabela destino caso ela não exista.
-        """
 
         if not self._tabela_existe(
             "imp_002_disciplina"
         ):
 
             logger.info(
-                "Criando tabela imp_002_disciplina..."
+                "🆕 Criando tabela imp_002_disciplina..."
             )
 
             with get_db_connection(
@@ -510,17 +468,29 @@ class ImportadorDisciplinas:
                 conn.execute(
                     """
                     CREATE TABLE imp_002_disciplina (
+
                         codigoDisciplina NVARCHAR(30) NOT NULL,
-                        nomeDisciplina NVARCHAR(100) NOT NULL,
-                        codigoCurso NVARCHAR(30) NOT NULL,
-                        periodo INTEGER NOT NULL,
-                        data_criacao DATETIME2 DEFAULT GETDATE(),
-                        data_atualizacao DATETIME2 DEFAULT GETDATE(),
+
+                        nomeDisciplina NVARCHAR(255) NOT NULL,
+
+                        codigoCurso NVARCHAR(30) NULL,
+
+                        periodo INT NULL,
+
+                        serie_ideal INT NULL,
+
+                        cargaHoraria INT NULL,
+
+                        tipoDisciplina NVARCHAR(30) NULL,
+
+                        data_criacao DATETIME2
+                            DEFAULT GETDATE(),
+
+                        data_atualizacao DATETIME2
+                            DEFAULT GETDATE(),
 
                         PRIMARY KEY (
-                            codigoDisciplina,
-                            codigoCurso,
-                            periodo
+                            codigoDisciplina
                         )
                     )
                     """
@@ -528,38 +498,39 @@ class ImportadorDisciplinas:
 
                 conn.commit()
 
-            logger.info(
-                "Tabela imp_002_disciplina criada."
-            )
+        self._criar_indices()
 
-        # ---------------------------------------------------------------------
-        # ÍNDICES
-        # ---------------------------------------------------------------------
+    # =========================================================================
+    # ÍNDICES
+    # =========================================================================
+
+    def _criar_indices(self):
 
         indices = [
 
             (
-                "idx_disciplinas_curso",
+                "idx_imp002_codigoCurso",
+
                 """
-                CREATE INDEX idx_disciplinas_curso
+                CREATE INDEX idx_imp002_codigoCurso
                 ON imp_002_disciplina(codigoCurso)
-                """,
+                """
             ),
 
             (
-                "idx_disciplinas_nome",
-                """
-                CREATE INDEX idx_disciplinas_nome
-                ON imp_002_disciplina(nomeDisciplina)
-                """,
-            ),
+                "idx_imp002_periodo",
 
+                """
+                CREATE INDEX idx_imp002_periodo
+                ON imp_002_disciplina(periodo)
+                """
+            ),
         ]
 
-        for nome_indice, sql in indices:
+        for nome, sql in indices:
 
             if self._indice_existe(
-                nome_indice
+                nome
             ):
                 continue
 
@@ -572,67 +543,211 @@ class ImportadorDisciplinas:
                     conn.execute(sql)
                     conn.commit()
 
-                logger.info(
-                    "Índice criado: %s",
-                    nome_indice,
-                )
+            except Exception:
 
-            except Exception as e:
-
-                logger.warning(
-                    "Índice %s não pôde ser criado: %s",
-                    nome_indice,
-                    e,
+                logger.exception(
+                    "Erro criando índice %s",
+                    nome
                 )
 
     # =========================================================================
-    # CONSULTA PRINCIPAL
+    # NORMALIZAÇÃO DO CURSO
+    # =========================================================================
+
+    @staticmethod
+    def _normalizar_curso(
+        curso
+    ):
+        """
+        Normaliza o curso somente APÓS a consulta da grade.
+
+        NULL, vazio e 999 representam COMPARTILHADA.
+        """
+
+        if curso is None:
+
+            return (
+                CURSO_COMPARTILHADO,
+                "COMPARTILHADA"
+            )
+
+        curso = str(
+            curso
+        ).strip()
+
+        if not curso:
+
+            return (
+                CURSO_COMPARTILHADO,
+                "COMPARTILHADA"
+            )
+
+        if curso == CURSO_COMPARTILHADO:
+
+            return (
+                CURSO_COMPARTILHADO,
+                "COMPARTILHADA"
+            )
+
+        if curso in MAPEAMENTO_CURSOS:
+
+            codigo, nome = (
+                MAPEAMENTO_CURSOS[
+                    curso
+                ]
+            )
+
+            return (
+                str(codigo).strip(),
+                str(nome).strip()
+            )
+
+        return (
+            curso,
+            curso
+        )
+
+    # =========================================================================
+    # CONSULTA DA GRADE
+    # =========================================================================
+
+    def _obter_menor_serie_grade(
+        self,
+        curso_original,
+        disciplina
+    ):
+        """
+        Obtém a menor serie_ideal da LY_GRADE usando o código ORIGINAL
+        do curso.
+
+        IMPORTANTE:
+
+        Não é feita nenhuma unificação do curso antes da consulta.
+
+        Exemplo:
+
+            curso_original = 141
+
+        consulta:
+
+            WHERE g.curso = 141
+
+        Somente depois disso o 141 será convertido para 056.
+
+        Retorna:
+            menor serie_ideal encontrada
+            ou None.
+        """
+
+        if curso_original is None:
+            return None
+
+        curso_original = str(
+            curso_original
+        ).strip()
+
+        if not curso_original:
+            return None
+
+        if curso_original == CURSO_COMPARTILHADO:
+            return None
+
+        sql = """
+            SELECT MIN(
+                TRY_CONVERT(
+                    INT,
+                    NULLIF(
+                        LTRIM(RTRIM(
+                            CAST(g.serie_ideal AS NVARCHAR(30))
+                        )),
+                        ''
+                    )
+                )
+            )
+            FROM LY_GRADE g
+
+            WHERE g.curso = ?
+              AND g.disciplina = ?
+        """
+
+        try:
+
+            with get_db_connection(
+                database_name="lyceum"
+            ) as conn:
+
+                row = conn.execute(
+                    sql,
+                    (
+                        curso_original,
+                        disciplina,
+                    )
+                ).fetchone()
+
+            if not row:
+                return None
+
+            valor = row[0]
+
+            if valor is None:
+                return None
+
+            valor = converter_inteiro(
+                valor
+            )
+
+            if valor is None:
+                return None
+
+            return valor
+
+        except Exception:
+
+            logger.exception(
+                "Erro consultando LY_GRADE | curso=%s | disciplina=%s",
+                curso_original,
+                disciplina
+            )
+
+            return None
+
+    # =========================================================================
+    # CONSULTA DAS TURMAS
     # =========================================================================
 
     def obter_dados_lyceum(self):
         """
-        Obtém as disciplinas diretamente das turmas válidas.
+        Obtém TODAS as disciplinas que possuem pelo menos uma turma
+        válida dentro dos filtros.
 
-        IMPORTANTE
-        ----------
+        LY_TURMA é a fonte de verdade.
 
-        Não existe JOIN com:
+        Nenhuma tabela complementar é utilizada para decidir se a
+        turma existe.
 
-            LY_MATRICULA
-            LY_ALUNO
-            LY_TURMA_DOCENTE
-
-        Portanto uma turma é válida independentemente de possuir:
-
-            aluno
-            docente
-
-        A faculdade é validada somente quando a turma possui
-        curso definido.
-
-        Para turma compartilhada:
-
-            t.curso IS NULL
-
-        o registro é preservado.
+        O curso original é preservado.
         """
 
-        query = f"""
+        logger.info(
+            "🔎 Consultando turmas válidas no Lyceum..."
+        )
+
+        sql = f"""
             SELECT DISTINCT
-
-                t.disciplina,
-
-                d.nome AS nome_disciplina,
-
-                t.curso,
-
-                g.serie_ideal,
-
-                t.turma,
 
                 t.ano,
 
-                t.semestre
+                t.semestre,
+
+                t.turma,
+
+                t.disciplina,
+
+                t.curso,
+
+                d.nome AS nome_disciplina,
+
+                c.faculdade
 
             FROM LY_TURMA t
 
@@ -642,10 +757,6 @@ class ImportadorDisciplinas:
             LEFT JOIN LY_DISCIPLINA d
                 ON d.disciplina = t.disciplina
 
-            LEFT JOIN LY_GRADE g
-                ON g.disciplina = t.disciplina
-               AND g.curso = t.curso
-
             WHERE t.ano = ?
 
               AND t.semestre IN (
@@ -654,63 +765,137 @@ class ImportadorDisciplinas:
 
               AND t.sit_turma = ?
 
+              AND t.disciplina IS NOT NULL
+
+              AND LTRIM(RTRIM(
+                  CAST(t.disciplina AS NVARCHAR(100))
+              )) <> ''
+
               AND (
+
+                    -- =====================================================
+                    -- TURMA COMPARTILHADA
+                    -- =====================================================
+
                     t.curso IS NULL
+
+                    OR LTRIM(RTRIM(
+                        CAST(t.curso AS NVARCHAR(30))
+                    )) = ''
+
+                    OR LTRIM(RTRIM(
+                        CAST(t.curso AS NVARCHAR(30))
+                    )) = '999'
+
+                    -- =====================================================
+                    -- TURMA DE CURSO REAL
+                    -- =====================================================
 
                     OR c.faculdade IN (
                         {self.faculdades_placeholders}
                     )
-                  )
-
-              AND (
-                    d.area_conhecimento IN (
-                        {self.areas_placeholders}
-                    )
-
-                    OR d.area_conhecimento IS NULL
-
-                    OR LTRIM(RTRIM(d.area_conhecimento)) = ''
-                  )
+              )
 
             ORDER BY
+
+                t.ano,
+                t.semestre,
+                t.turma,
                 t.disciplina,
-                t.curso,
-                t.turma
+                t.curso
         """
 
-        params = [
+        params = (
             ANO_VIGENTE,
             *PERIODOS_VIGENTES,
+
             SITUACAO_TURMA_VALIDA,
+
             *FACULDADES_INCLUIDAS,
-            *self.areas,
+        )
+
+        try:
+
+            with get_db_connection(
+                database_name="lyceum"
+            ) as conn:
+
+                rows = conn.execute(
+                    sql,
+                    params
+                ).fetchall()
+
+        except Exception:
+
+            logger.exception(
+                "❌ Erro consultando LY_TURMA."
+            )
+
+            return []
+
+        colunas = [
+
+            "ano",
+            "semestre",
+            "turma",
+            "disciplina",
+            "curso",
+            "nome_disciplina",
+            "faculdade",
+        ]
+
+        dados = [
+            dict(
+                zip(
+                    colunas,
+                    row
+                )
+            )
+            for row in rows
         ]
 
         logger.info(
-            "Consultando LY_TURMA..."
+            "📊 Turmas válidas encontradas: %d",
+            len(dados)
         )
 
-        logger.info(
-            "A consulta NÃO depende de aluno ou docente."
-        )
+        # ---------------------------------------------------------------------
+        # Diagnóstico por contexto
+        # ---------------------------------------------------------------------
 
-        with get_db_connection() as conn:
+        contextos = set()
 
-            cursor = conn.cursor()
+        for item in dados:
 
-            cursor.execute(
-                query,
-                params,
+            disciplina = str(
+                item.get(
+                    "disciplina"
+                ) or ""
+            ).strip()
+
+            curso = item.get(
+                "curso"
             )
 
-            rows = cursor.fetchall()
+            curso_str = (
+                str(curso).strip()
+                if curso is not None
+                else ""
+            )
+
+            contextos.add(
+                (
+                    disciplina,
+                    curso_str
+                )
+            )
 
         logger.info(
-            "Linhas de turmas/disciplina retornadas: %d",
-            len(rows),
+            "📚 Contextos disciplina/curso encontrados: %d",
+            len(contextos)
         )
 
-        return rows
+        return dados
 
     # =========================================================================
     # TRANSFORMAÇÃO
@@ -718,355 +903,335 @@ class ImportadorDisciplinas:
 
     def transformar_dados(
         self,
-        dados_lyceum,
+        dados_lyceum
     ):
         """
-        Consolida as turmas em combinações:
+        Transforma as turmas em disciplinas do Qstione.
 
-            disciplina
-            +
-            curso unificado
+        O curso original é utilizado para consultar LY_GRADE.
 
-        e obtém o menor serie_ideal disponível.
+        Depois da consulta da grade, o curso é unificado.
 
-        A combinação é baseada no curso da própria turma.
+        Quando houver várias grades para o mesmo curso original e
+        disciplina, a menor série será utilizada.
         """
 
-        disciplinas = {}
+        registros = {}
 
-        for (
-            disciplina,
-            nome_disciplina,
-            curso,
-            serie_ideal,
-            turma,
-            ano,
-            semestre,
-        ) in dados_lyceum:
-
-            # -----------------------------------------------------------------
-            # DISCIPLINA
-            # -----------------------------------------------------------------
-
-            if not validar_codigo_disciplina(
-                disciplina
-            ):
-
-                logger.warning(
-                    "Código de disciplina inválido: %s",
-                    disciplina,
-                )
-
-                continue
+        for item in dados_lyceum:
 
             disciplina = str(
-                disciplina
+                item.get(
+                    "disciplina"
+                ) or ""
             ).strip()
 
-            # -----------------------------------------------------------------
-            # CURSO
-            # -----------------------------------------------------------------
+            if not disciplina:
+                continue
+
+            nome_disciplina = str(
+                item.get(
+                    "nome_disciplina"
+                ) or disciplina
+            ).strip()
+
+            curso_original = item.get(
+                "curso"
+            )
+
+            # ================================================================
+            # CURSO ORIGINAL
+            # ================================================================
+
+            curso_original_str = (
+                str(
+                    curso_original
+                ).strip()
+                if curso_original is not None
+                else ""
+            )
+
+            curso_eh_compartilhado = (
+                curso_original is None
+                or curso_original_str == ""
+                or curso_original_str == CURSO_COMPARTILHADO
+            )
+
+            # ================================================================
+            # GRADE
+            # ================================================================
+
+            serie_grade = None
+
+            if not curso_eh_compartilhado:
+
+                serie_grade = (
+                    self._obter_menor_serie_grade(
+                        curso_original_str,
+                        disciplina
+                    )
+                )
+
+            # ================================================================
+            # CURSO UNIFICADO
+            #
+            # IMPORTANTE:
+            #
+            # A unificação acontece SOMENTE depois da consulta da grade.
+            # ================================================================
 
             curso_unificado, nome_curso_unificado = (
-                self.normalizar_curso(
-                    curso
+                self._normalizar_curso(
+                    curso_original
                 )
             )
 
-            # -----------------------------------------------------------------
-            # REGISTRO DA DISCIPLINA
-            # -----------------------------------------------------------------
-
-            if disciplina not in disciplinas:
-
-                disciplinas[disciplina] = {
-                    "nome_disciplina": (
-                        nome_disciplina
-                    ),
-                    "cursos": {},
-                }
-
-            if (
-                curso_unificado
-                not in disciplinas[disciplina]["cursos"]
-            ):
-
-                disciplinas[disciplina]["cursos"][
-                    curso_unificado
-                ] = {
-                    "nome_curso": (
-                        nome_curso_unificado
-                    ),
-                    "periodos": set(),
-                    "turmas": set(),
-                }
-
-            curso_info = (
-                disciplinas[disciplina]["cursos"][
-                    curso_unificado
-                ]
-            )
-
-            # -----------------------------------------------------------------
-            # TURMA
-            # -----------------------------------------------------------------
-
-            if turma is not None:
-
-                curso_info["turmas"].add(
-                    str(turma).strip()
-                )
-
-            # -----------------------------------------------------------------
+            # ================================================================
             # PERÍODO
-            # -----------------------------------------------------------------
+            # ================================================================
 
-            if serie_ideal is not None:
+            if serie_grade is not None:
 
-                try:
-
-                    periodo = converter_inteiro(
-                        serie_ideal
-                    )
-
-                    if periodo is not None:
-
-                        curso_info[
-                            "periodos"
-                        ].add(
-                            periodo
-                        )
-
-                except Exception:
-
-                    logger.warning(
-                        "Não foi possível converter "
-                        "serie_ideal=%s | disciplina=%s | curso=%s",
-                        serie_ideal,
-                        disciplina,
-                        curso_unificado,
-                    )
-
-        # =========================================================================
-        # CONVERSÃO FINAL
-        # =========================================================================
-
-        dados_transformados = []
-
-        cont_periodo_zero = 0
-
-        for disciplina, info in disciplinas.items():
-
-            nome_disciplina_original = (
-                info["nome_disciplina"]
-            )
-
-            # ---------------------------------------------------------------------
-            # NOME DA DISCIPLINA
-            # ---------------------------------------------------------------------
-
-            if nome_disciplina_original:
-
-                nome_disciplina = truncar_texto(
-                    str(
-                        nome_disciplina_original
-                    ).strip(),
-                    100,
-                )
+                periodo = serie_grade
 
             else:
 
-                nome_disciplina = truncar_texto(
+                periodo = 1
+
+            if periodo <= 0:
+
+                periodo = 1
+
+            # ================================================================
+            # CÓDIGO DA DISCIPLINA
+            # ================================================================
+
+            codigo_disciplina = (
+                gerar_codigo_disciplina_curso(
                     disciplina,
-                    100,
+                    nome_curso_unificado,
+                    curso_unificado
                 )
+            )
 
-                logger.debug(
-                    "Nome da disciplina não encontrado: %s",
-                    disciplina,
-                )
+            codigo_disciplina = truncar_texto(
+                codigo_disciplina,
+                30
+            )
 
-            # ---------------------------------------------------------------------
-            # CURSOS
-            # ---------------------------------------------------------------------
+            # ================================================================
+            # CHAVE LÓGICA
+            # ================================================================
+            #
+            # O contexto original da turma é usado como parte da
+            # deduplicação.
+            #
+            # Isso impede que:
+            #
+            #   DISC001 / 999
+            #
+            # seja confundido com:
+            #
+            #   DISC001 / 056
+            #
+            # ================================================================
 
-            for (
-                curso_unificado,
-                curso_data,
-            ) in info["cursos"].items():
+            chave = (
+                disciplina,
+                curso_original_str
+            )
 
-                nome_curso = (
-                    curso_data["nome_curso"]
-                )
+            registro = {
 
-                periodos = (
-                    curso_data["periodos"]
-                )
+                "codigoDisciplina":
+                    codigo_disciplina,
 
-                turmas = (
-                    curso_data["turmas"]
-                )
-
-                # -------------------------------------------------------------
-                # PERÍODO
-                # -------------------------------------------------------------
-
-                if not periodos:
-
-                    periodo = 1
-
-                    logger.warning(
-                        "Sem série/período em LY_GRADE "
-                        "para disciplina=%s curso=%s "
-                        "turmas=%s. Utilizando período=1.",
-                        disciplina,
-                        curso_unificado,
-                        sorted(turmas),
-                    )
-
-                else:
-
-                    periodo_raw = min(
-                        periodos
-                    )
-
-                    periodo = converter_inteiro(
-                        periodo_raw
-                    )
-
-                    if periodo == 0:
-
-                        periodo = 1
-
-                        cont_periodo_zero += 1
-
-                        logger.warning(
-                            "Período 0 convertido para 1 | "
-                            "disciplina=%s | curso=%s",
-                            disciplina,
-                            curso_unificado,
-                        )
-
-                # -------------------------------------------------------------
-                # VALIDAÇÃO DO PERÍODO
-                # -------------------------------------------------------------
-
-                if (
-                    periodo is None
-                    or periodo < 1
-                ):
-
-                    logger.warning(
-                        "Período inválido | "
-                        "disciplina=%s | curso=%s | periodo=%s",
-                        disciplina,
-                        curso_unificado,
-                        periodo,
-                    )
-
-                    continue
-
-                # -------------------------------------------------------------
-                # VALIDAÇÃO DO CURSO
-                # -------------------------------------------------------------
-
-                if curso_unificado != "999":
-
-                    if not validar_codigo_curso(
-                        curso_unificado
-                    ):
-
-                        logger.warning(
-                            "Código de curso inválido | "
-                            "disciplina=%s | curso=%s",
-                            disciplina,
-                            curso_unificado,
-                        )
-
-                        continue
-
-                # -------------------------------------------------------------
-                # CÓDIGO DA DISCIPLINA
-                # -------------------------------------------------------------
-
-                codigo_disciplina_final = (
-                    gerar_codigo_disciplina_curso(
-                        disciplina,
-                        nome_curso,
-                        curso_unificado,
-                    )
-                )
-
-                codigo_disciplina_final = (
+                "nomeDisciplina":
                     truncar_texto(
-                        codigo_disciplina_final,
-                        30,
+                        nome_disciplina,
+                        255
+                    ),
+
+                "codigoCurso":
+                    truncar_texto(
+                        curso_unificado,
+                        30
+                    ),
+
+                "periodo":
+                    periodo,
+
+                "serie_ideal":
+                    serie_grade,
+
+                "cargaHoraria":
+                    None,
+
+                "tipoDisciplina":
+                    None,
+
+                # Informações auxiliares não gravadas
+                # diretamente na tabela.
+                "_curso_original":
+                    curso_original_str,
+
+                "_disciplina":
+                    disciplina,
+
+                "_nome_curso":
+                    nome_curso_unificado,
+            }
+
+            # ================================================================
+            # DEDUPLICAÇÃO
+            # ================================================================
+            #
+            # Se a mesma disciplina/contexto original aparecer em várias
+            # turmas, mantemos apenas um registro.
+            #
+            # Se houver diferentes séries, usamos a MENOR.
+            # ================================================================
+
+            if chave not in registros:
+
+                registros[chave] = registro
+
+            else:
+
+                existente = registros[
+                    chave
+                ]
+
+                periodo_existente = (
+                    existente.get(
+                        "periodo"
                     )
+                    or 1
                 )
 
-                # -------------------------------------------------------------
-                # REGISTRO
-                # -------------------------------------------------------------
-
-                dados_transformados.append(
-                    {
-                        "codigoDisciplina": (
-                            codigo_disciplina_final
-                        ),
-
-                        "nomeDisciplina": (
-                            nome_disciplina
-                        ),
-
-                        "codigoCurso": (
-                            str(
-                                curso_unificado
-                            )[:30]
-                        ),
-
-                        "periodo": periodo,
-                    }
+                periodo_novo = (
+                    registro.get(
+                        "periodo"
+                    )
+                    or 1
                 )
 
-        if cont_periodo_zero:
+                if periodo_novo < periodo_existente:
 
-            logger.info(
-                "Total de períodos 0 convertidos para 1: %d",
-                cont_periodo_zero,
-            )
+                    existente[
+                        "periodo"
+                    ] = periodo_novo
 
-        return dados_transformados
+                    existente[
+                        "serie_ideal"
+                    ] = registro[
+                        "serie_ideal"
+                    ]
 
-    # =========================================================================
-    # LIMPEZA
-    # =========================================================================
-
-    def limpar_tabela(self):
-        """
-        Remove todos os registros existentes antes da nova carga.
-        """
-
-        self._criar_tabela()
-
-        logger.info(
-            "Limpando tabela imp_002_disciplina..."
+        dados = list(
+            registros.values()
         )
 
-        with get_db_connection(
-            database_name="qstione"
-        ) as conn:
+        # =====================================================================
+        # SEGUNDA DEDUPLICAÇÃO
+        # =====================================================================
+        #
+        # Após a unificação, dois códigos originais podem apontar para o
+        # mesmo curso.
+        #
+        # Exemplo:
+        #
+        #   056 -> 056
+        #   141 -> 056
+        #
+        # Se gerarem exatamente o mesmo codigoDisciplina e mesmo período,
+        # precisamos consolidar.
+        #
+        # Caso o período seja diferente, os registros continuam distintos
+        # somente se o modelo atual de codigoDisciplina permitir isso.
+        # =====================================================================
 
-            conn.execute(
-                """
-                DELETE FROM imp_002_disciplina
-                """
+        finais = {}
+
+        for registro in dados:
+
+            chave_final = (
+                registro[
+                    "codigoDisciplina"
+                ]
             )
 
-            conn.commit()
+            if chave_final not in finais:
+
+                finais[
+                    chave_final
+                ] = registro
+
+                continue
+
+            existente = finais[
+                chave_final
+            ]
+
+            periodo_existente = (
+                existente.get(
+                    "periodo"
+                )
+                or 1
+            )
+
+            periodo_novo = (
+                registro.get(
+                    "periodo"
+                )
+                or 1
+            )
+
+            if periodo_novo < periodo_existente:
+
+                finais[
+                    chave_final
+                ] = registro
+
+        dados_finais = list(
+            finais.values()
+        )
 
         logger.info(
-            "Tabela imp_002_disciplina limpa."
+            "🔄 Registros transformados: %d",
+            len(dados_finais)
         )
+
+        # =====================================================================
+        # DIAGNÓSTICO
+        # =====================================================================
+
+        compartilhadas = 0
+        cursos_reais = 0
+
+        for registro in dados_finais:
+
+            if registro[
+                "codigoCurso"
+            ] == CURSO_COMPARTILHADO:
+
+                compartilhadas += 1
+
+            else:
+
+                cursos_reais += 1
+
+        logger.info(
+            "📚 Disciplinas de cursos reais: %d",
+            cursos_reais
+        )
+
+        logger.info(
+            "🌐 Disciplinas compartilhadas: %d",
+            compartilhadas
+        )
+
+        return dados_finais
 
     # =========================================================================
     # IMPORTAÇÃO
@@ -1074,19 +1239,16 @@ class ImportadorDisciplinas:
 
     def importar_para_qstione(
         self,
-        dados_transformados,
+        dados_transformados
     ):
         """
         Reconstrói a tabela imp_002_disciplina.
-
-        Não utiliza MERGE porque a regra dos importadores deste projeto
-        é reconstruir integralmente a tabela a cada execução.
         """
 
         self._criar_tabela()
 
-        total_inseridos = 0
-        total_erros = 0
+        inseridos = 0
+        erros = 0
 
         try:
 
@@ -1094,12 +1256,8 @@ class ImportadorDisciplinas:
                 database_name="qstione"
             ) as conn:
 
-                # -------------------------------------------------------------
-                # LIMPA
-                # -------------------------------------------------------------
-
                 logger.info(
-                    "DELETE FROM imp_002_disciplina"
+                    "🧹 Limpando tabela destino..."
                 )
 
                 conn.execute(
@@ -1110,11 +1268,9 @@ class ImportadorDisciplinas:
 
                 cursor = conn.cursor()
 
-                # -------------------------------------------------------------
-                # INSERT
-                # -------------------------------------------------------------
-
-                for reg in dados_transformados:
+                for registro in (
+                    dados_transformados
+                ):
 
                     try:
 
@@ -1126,6 +1282,9 @@ class ImportadorDisciplinas:
                                 nomeDisciplina,
                                 codigoCurso,
                                 periodo,
+                                serie_ideal,
+                                cargaHoraria,
+                                tipoDisciplina,
                                 data_criacao,
                                 data_atualizacao
                             )
@@ -1135,39 +1294,67 @@ class ImportadorDisciplinas:
                                 ?,
                                 ?,
                                 ?,
+                                ?,
+                                ?,
+                                ?,
                                 GETDATE(),
                                 GETDATE()
                             )
                             """,
                             (
-                                reg["codigoDisciplina"],
-                                reg["nomeDisciplina"],
-                                reg["codigoCurso"],
-                                reg["periodo"],
-                            ),
+                                registro[
+                                    "codigoDisciplina"
+                                ],
+
+                                registro[
+                                    "nomeDisciplina"
+                                ],
+
+                                registro[
+                                    "codigoCurso"
+                                ],
+
+                                registro[
+                                    "periodo"
+                                ],
+
+                                registro[
+                                    "serie_ideal"
+                                ],
+
+                                registro[
+                                    "cargaHoraria"
+                                ],
+
+                                registro[
+                                    "tipoDisciplina"
+                                ],
+                            )
                         )
 
-                        total_inseridos += 1
+                        inseridos += 1
 
                     except Exception as e:
 
-                        total_erros += 1
+                        erros += 1
 
                         logger.error(
-                            "Erro ao inserir "
-                            "disciplina=%s | curso=%s | periodo=%s | erro=%s",
-                            reg["codigoDisciplina"],
-                            reg["codigoCurso"],
-                            reg["periodo"],
-                            e,
+                            "❌ Erro inserindo disciplina "
+                            "%s: %s",
+
+                            registro[
+                                "codigoDisciplina"
+                            ],
+
+                            e
                         )
 
                 conn.commit()
 
-        except Exception as e:
+        except Exception:
 
             logger.exception(
-                "Erro durante reconstrução da tabela."
+                "❌ Erro durante reconstrução da tabela."
             )
 
             return {
@@ -1182,9 +1369,9 @@ class ImportadorDisciplinas:
             }
 
         return {
-            "total_inseridos": total_inseridos,
+            "total_inseridos": inseridos,
             "total_atualizados": 0,
-            "total_erros": total_erros,
+            "total_erros": erros,
             "total_processados": len(
                 dados_transformados
             ),
@@ -1195,15 +1382,14 @@ class ImportadorDisciplinas:
     # =========================================================================
 
     def executar_importacao(self):
-        """
-        Executa o importador completo.
-        """
 
-        print("=" * 70)
+        print("=" * 90)
+
         print(
             "IMPORTAÇÃO: imp_002_disciplina"
         )
-        print("=" * 70)
+
+        print("=" * 90)
 
         print(
             f"📅 Ano: {ANO_VIGENTE}"
@@ -1221,89 +1407,68 @@ class ImportadorDisciplinas:
             f"📚 Situação: {SITUACAO_TURMA_VALIDA}"
         )
 
-        print(
-            f"📄 Log: {LOG_FILE}"
-        )
+        print("=" * 90)
 
-        # ---------------------------------------------------------------------
-        # OBTÉM
-        # ---------------------------------------------------------------------
+        # =====================================================================
+        # CONSULTA
+        # =====================================================================
 
-        dados_lyceum = (
+        dados = (
             self.obter_dados_lyceum()
         )
 
-        logger.info(
-            "📊 Combinações/turmas retornadas: %d",
-            len(dados_lyceum),
-        )
-
         print(
-            f"📊 Turmas encontradas: "
-            f"{len(dados_lyceum)}"
+            f"📊 Turmas encontradas: {len(dados)}"
         )
 
-        # ---------------------------------------------------------------------
-        # TRANSFORMA
-        # ---------------------------------------------------------------------
+        # =====================================================================
+        # TRANSFORMAÇÃO
+        # =====================================================================
 
-        dados_transformados = (
+        transformados = (
             self.transformar_dados(
-                dados_lyceum
+                dados
             )
         )
 
-        logger.info(
-            "✅ Registros para importação: %d",
-            len(dados_transformados),
-        )
-
         print(
-            f"✅ Registros disciplina/curso: "
-            f"{len(dados_transformados)}"
+            f"✅ Disciplinas finais: "
+            f"{len(transformados)}"
         )
 
-        # ---------------------------------------------------------------------
-        # IMPORTA
-        # ---------------------------------------------------------------------
+        # =====================================================================
+        # IMPORTAÇÃO
+        # =====================================================================
 
         resultado = (
             self.importar_para_qstione(
-                dados_transformados
+                transformados
             )
         )
 
         print(
             f"📈 Inseridos: "
-            f"{resultado['total_inseridos']} "
-            f"| Erros: "
+            f"{resultado['total_inseridos']}"
+        )
+
+        print(
+            f"❌ Erros: "
             f"{resultado['total_erros']}"
         )
 
-        logger.info(
-            "RESULTADO FINAL | "
-            "Inseridos=%d | Atualizados=%d | Erros=%d | Processados=%d",
-            resultado["total_inseridos"],
-            resultado["total_atualizados"],
-            resultado["total_erros"],
-            resultado["total_processados"],
-        )
+        print("=" * 90)
 
         logger.info(
             "FIM imp_002_disciplina"
         )
 
-        return dados_transformados
+        return transformados
 
 
 # =============================================================================
-# EXECUÇÃO DIRETA
+# PLAY DO VS CODE
 # =============================================================================
 
 if __name__ == "__main__":
 
-    importador = (
-        ImportadorDisciplinas()
-    )
-
-    importador.executar_importacao()
+    ImportadorDisciplina().executar_importacao()
