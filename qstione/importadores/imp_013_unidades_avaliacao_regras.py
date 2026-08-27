@@ -1,8 +1,7 @@
-
 """
 qstione/importadores/imp_013_unidades_avaliacao_regras.py
 
-Gerador independente de unidades de avaliação para o Qstione.
+Gerador independente de unidades de avaliação.
 
 IMPORTANTE
 ----------
@@ -10,27 +9,46 @@ Este arquivo é uma alternativa ao:
 
     imp_013_unidades_avaliacao.py
 
-O importador original NÃO deve ser alterado.
+O importador original NÃO é alterado.
 
-Este processo não utiliza LY_PROVA.
+===============================================================================
+FONTE DAS OFERTAS
+===============================================================================
 
-As avaliações são geradas diretamente em Python com base nos dados
-acadêmicos atuais do Lyceum.
+A fonte de verdade das disciplinas ofertadas é LY_TURMA.
 
-FILTROS
--------
-Os filtros são definidos diretamente neste arquivo para permitir execução
-pelo botão PLAY do VS Code:
+Uma disciplina somente será processada quando existir uma turma que:
 
-    ANO
-    PERIODOS
-    FACULDADES
+    - pertença ao ANO configurado;
+    - pertença a um dos PERIODOS configurados;
+    - esteja com situação válida;
+    - pertença a uma faculdade configurada.
 
-A faculdade é obtida de LY_CURSO.
+O curso da oferta é sempre LY_TURMA.curso ORIGINAL.
 
+===============================================================================
+CURSO
+===============================================================================
+
+Cursos reais são validados pela faculdade através de LY_CURSO.
+
+Os seguintes valores representam curso compartilhado:
+
+    NULL
+    vazio
+    999
+
+Eles são convertidos para:
+
+    999 - COMPARTILHADA
+
+Cursos reais somente são unificados pelo MAPEAMENTO_CURSOS
+depois que todas as informações dependentes do código original
+foram resolvidas.
+
+===============================================================================
 CURRÍCULO
----------
-O currículo é obtido através de LY_GRADE.
+===============================================================================
 
 LY_GRADE possui:
 
@@ -39,87 +57,137 @@ LY_GRADE possui:
     disciplina
     turno
 
-O identificador lógico do currículo é construído como:
+O campo curriculo sozinho NÃO é um identificador único.
 
-    curriculo-curso-turno
+O identificador lógico do currículo é:
+
+    curriculo + curso ORIGINAL + turno ORIGINAL
 
 Exemplo:
 
-    curriculo = 20152
-    curso     = 014
-    turno     = MV
+    20261 + 014 + MV
 
-    ID_CURRICULO = 20152-014-MV
-
-
-REGRAS DE CURSO
----------------
-O código do curso utilizado pelo Qstione é determinado por
-MAPEAMENTO_CURSOS, proveniente do imp_002_disciplina.
-
-Curso NULL ou vazio:
-
-    999 - COMPARTILHADA
-
-IMPORTANTE:
------------
-Cursos que não pertencem à faculdade filtrada não entram no processo,
-pois o filtro de faculdade é aplicado em LY_CURSO.
-
-Um curso não encontrado no MAPEAMENTO_CURSOS, mas que efetivamente
-pertença à faculdade filtrada, é tratado como 999.
-
-
-REGRAS DE AVALIAÇÃO
--------------------
-
-GERAL
-    AVD1
-    AVD2
-    SUBS
-
-ENGENHARIAS
-    S1P1
-    S1P2
-    S2P1
-    S2P2
-
-MEDICINA - CURRÍCULOS NOVOS (20231, 20251, 20261)
-    S1 - Somativa 1
-    S2 - Somativa 2
-    SUBS - Prova Substitutiva
-    S1-D/A - Prova 1 Adap-Dep
-    S2-D/A - Prova 2 Adap-Dep
-    SUBS-D/A - Prova Substitutiva Adap-Dep
-    SI - Simulado
-
-MEDICINA - CURRÍCULO ANTIGO (20152, Modular)
-    PM - Prova Módulo
-    SC - Segunda Chamada
-    PF - Prova Final
-    PE - Prova Especial
-    SI - Simulado
-
-MEDICINA
---------
-Currículos novos:
+resulta em:
 
     20261-014-MV
-    20251-014-MV
-    20231-014-MV
 
-Currículo antigo:
+Outro exemplo:
+
+    20261 + 056 + MV
+    20261 + 141 + MV
+
+são DOIS contextos curriculares diferentes:
+
+    20261-056-MV
+    20261-141-MV
+
+Mesmo que posteriormente:
+
+    141 -> 056
+
+pelo MAPEAMENTO_CURSOS.
+
+===============================================================================
+ORDEM DA RESOLUÇÃO
+===============================================================================
+
+1. LY_TURMA determina a oferta.
+2. Preserva curso original.
+3. Consulta LY_GRADE usando curso ORIGINAL.
+4. Identifica curriculo + curso original + turno original.
+5. Determina a menor série dentro do contexto curricular.
+6. Somente então aplica MAPEAMENTO_CURSOS.
+7. Determina o modelo de avaliações.
+8. Gera as avaliações.
+
+===============================================================================
+MENOR SÉRIE
+===============================================================================
+
+Quando existirem várias ocorrências para o mesmo:
+
+    curriculo
+    curso original
+    disciplina
+    turno
+
+será utilizada a MENOR serie_ideal.
+
+Não será feito MIN() misturando currículos diferentes.
+
+===============================================================================
+ORDEM
+===============================================================================
+
+A ordem das disciplinas segue a ordem em que as ofertas são
+obtidas de LY_TURMA.
+
+Não utilizar sorted() para reordenar disciplinas ou currículos.
+
+A ordem das avaliações é determinada exclusivamente pela regra
+de cada curso/currículo.
+
+===============================================================================
+AVALIAÇÕES
+===============================================================================
+
+GERAL:
+
+    1 - AVD1
+    2 - AVD2
+    3 - SUBS
+
+
+ENGENHARIA:
+
+    1 - S1P1
+    2 - S1P2
+    3 - S2P1
+    4 - S2P2
+
+
+MEDICINA - CURRÍCULO NOVO:
+
+    1 - S1
+    2 - S2
+    3 - SUBS
+    4 - S1-D/A
+    5 - S2-D/A
+    6 - SUBS-D/A
+    7 - SI
+
+
+MEDICINA - CURRÍCULO ANTIGO:
+
+    1 - PM
+    2 - SC
+    3 - PF
+    4 - PE
+    5 - SI
+
+
+MEDICINA:
 
     20152-014-MV
+        -> currículo antigo
 
-Não existe mais regra baseada em categoria da disciplina.
+    20231-014-MV
+        -> currículo novo
 
+    20251-014-MV
+        -> currículo novo
 
+    20261-014-MV
+        -> currículo novo
+
+Currículos futuros de Medicina posteriores a 20231 também são
+considerados novos.
+
+===============================================================================
 EXECUÇÃO
---------
-Executar diretamente pelo botão PLAY do VS Code.
+===============================================================================
 
-Não são necessários argumentos de linha de comando.
+O arquivo pode ser executado diretamente pelo botão PLAY do VS Code.
 """
 
 from __future__ import annotations
@@ -127,13 +195,14 @@ from __future__ import annotations
 import logging
 import os
 import sys
+
 from collections import Counter
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
-# ============================================================================
-# PATH DO PROJETO
-# ============================================================================
+# =============================================================================
+# PATH
+# =============================================================================
 
 ROOT = os.path.dirname(
     os.path.dirname(
@@ -147,9 +216,9 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
-# ============================================================================
+# =============================================================================
 # IMPORTS DO PROJETO
-# ============================================================================
+# =============================================================================
 
 from core.database import get_db_connection
 
@@ -159,217 +228,324 @@ from qstione.core.transformacoes import (
     truncar_texto,
 )
 
-from qstione.importadores.imp_002_disciplina import MAPEAMENTO_CURSOS
-
-
-# ============================================================================
-# LOG
-# ============================================================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
+from qstione.config.filtros import (
+    ANO_VIGENTE,
+    PERIODOS_VIGENTES,
+    FACULDADES_INCLUIDAS,
+    SITUACAO_TURMA_VALIDA,
 )
 
-logger = logging.getLogger(__name__)
+from qstione.importadores.imp_002_disciplina import (
+    MAPEAMENTO_CURSOS,
+)
 
 
-# ============================================================================
-# CONFIGURAÇÃO DE EXECUÇÃO
-# ============================================================================
-#
-# Estes valores são alterados diretamente no arquivo.
-#
-# O programa é executado pelo botão PLAY do VS Code.
-#
-# ============================================================================
+# =============================================================================
+# LOG
+# =============================================================================
 
-ANO = 2026
+logger = logging.getLogger(
+    "imp_013_unidades_avaliacao_regras"
+)
 
-PERIODOS = [
-    "2",
-]
+if not logger.handlers:
 
-FACULDADES = [
-    "001",
-]
+    handler = logging.StreamHandler()
+
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(message)s"
+        )
+    )
+
+    logger.addHandler(
+        handler
+    )
+
+logger.setLevel(
+    logging.INFO
+)
 
 
-# ============================================================================
+# =============================================================================
+# CONSTANTES
+# =============================================================================
+
+CURSO_COMPARTILHADO = "999"
+
+CURSO_MEDICINA = "014"
+
+
+# =============================================================================
 # CURSOS DE ENGENHARIA
-# ============================================================================
-#
-# Estes são os códigos UNIFICADOS do MAPEAMENTO_CURSOS.
-#
-# Portanto:
-#
-# 006 -> Engenharia Civil
-# 020 -> Engenharia Civil
-#
-# ambos acabam em:
-#
-# 006
-#
-# ============================================================================
+# =============================================================================
 
 CURSOS_ENGENHARIA = {
-    "006",  # Engenharia Civil
-    "059",  # Engenharia de Produção
-    "044",  # Engenharia Elétrica
-    "017",  # Engenharia Mecânica
-    "097",  # Engenharia da Computação
-    "079",  # Engenharia
+    "006",
+    "017",
+    "044",
+    "059",
+    "079",
+    "097",
 }
 
 
-# ============================================================================
-# MEDICINA
-# ============================================================================
-
-CODIGO_CURSO_MEDICINA = "014"
-
-
-# ============================================================================
+# =============================================================================
 # CURRÍCULOS DE MEDICINA
-# ============================================================================
-#
-# O identificador usado aqui é o ID lógico:
-#
-#     curriculo-curso-turno
-#
-# Exemplo:
-#
-#     20261-014-MV
-#
-# Não são utilizados os antigos IDs numéricos da consulta anterior.
-#
-# ============================================================================
+# =============================================================================
 
-CURRICULOS_MEDICINA_NOVOS = {
-    "20261-014-MV",
-    "20251-014-MV",
-    "20231-014-MV",
-}
-
-
-CURRICULOS_MEDICINA_ANTIGOS = {
+CURRICULOS_MEDICINA_ANTIGO = {
     "20152-014-MV",
 }
 
 
-# ============================================================================
-# AVALIAÇÕES
-# ============================================================================
-#
-# Estrutura:
-#
-#     (ordem, sufixo, nome)
-#
-# ============================================================================
+CURRICULOS_MEDICINA_NOVOS = {
+    "20231-014-MV",
+    "20251-014-MV",
+    "20261-014-MV",
+}
 
-AVALIACOES_GERAIS: Tuple[Tuple[int, str, str], ...] = (
-    (1, "-AVD1", "Avaliação 1"),
-    (2, "-AVD2", "Avaliação 2"),
-    (3, "-SUBS", "Substitutiva"),
+
+# =============================================================================
+# REGRA GERAL
+# =============================================================================
+
+AVALIACOES_GERAIS = (
+    (
+        1,
+        "-AVD1",
+        "Avaliação 1",
+    ),
+    (
+        2,
+        "-AVD2",
+        "Avaliação 2",
+    ),
+    (
+        3,
+        "-SUBS",
+        "Substitutiva",
+    ),
 )
 
 
-AVALIACOES_ENGENHARIA: Tuple[Tuple[int, str, str], ...] = (
-    (1, "-S1P1", "Somativa 1 Parte 1"),
-    (2, "-S1P2", "Somativa 1 Parte 2"),
-    (3, "-S2P1", "Somativa 2 Parte 1"),
-    (4, "-S2P2", "Somativa 2 Parte 2"),
+# =============================================================================
+# REGRA ENGENHARIA
+# =============================================================================
+
+AVALIACOES_ENGENHARIA = (
+    (
+        1,
+        "-S1P1",
+        "Somativa 1 Parte 1",
+    ),
+    (
+        2,
+        "-S1P2",
+        "Somativa 1 Parte 2",
+    ),
+    (
+        3,
+        "-S2P1",
+        "Somativa 2 Parte 1",
+    ),
+    (
+        4,
+        "-S2P2",
+        "Somativa 2 Parte 2",
+    ),
 )
 
 
-AVALIACOES_MEDICINA_NOVO: Tuple[Tuple[int, str, str], ...] = (
-    (1, "-S1", "Somativa 1"),
-    (2, "-S2", "Somativa 2"),
-    (3, "-SUBS", "Prova Substitutiva"),
-    (4, "-S1-D/A", "Prova 1 Adap-Dep"),
-    (5, "-S2-D/A", "Prova 2 Adap-Dep"),
-    (6, "-SUBS-D/A", "Prova Substitutiva Adap-Dep"),
-    (7, "-SI", "Simulado"),
+# =============================================================================
+# REGRA MEDICINA - NOVA
+# =============================================================================
+
+AVALIACOES_MEDICINA_NOVO = (
+    (
+        1,
+        "-S1",
+        "Somativa 1",
+    ),
+    (
+        2,
+        "-S2",
+        "Somativa 2",
+    ),
+    (
+        3,
+        "-SUBS",
+        "Prova Substitutiva",
+    ),
+    (
+        4,
+        "-S1-D/A",
+        "Prova 1 Adap-Dep",
+    ),
+    (
+        5,
+        "-S2-D/A",
+        "Prova 2 Adap-Dep",
+    ),
+    (
+        6,
+        "-SUBS-D/A",
+        "Prova Substitutiva Adap-Dep",
+    ),
+    (
+        7,
+        "-SI",
+        "Simulado",
+    ),
 )
 
 
-AVALIACOES_MEDICINA_ANTIGO: Tuple[Tuple[int, str, str], ...] = (
-    (1, "-PM", "Prova Módulo"),
-    (2, "-SC", "Segunda Chamada"),
-    (3, "-PF", "Prova Final"),
-    (4, "-PE", "Prova Especial"),
-    (5, "-SI", "Simulado"),
+# =============================================================================
+# REGRA MEDICINA - ANTIGA
+# =============================================================================
+
+AVALIACOES_MEDICINA_ANTIGO = (
+    (
+        1,
+        "-PM",
+        "Prova Módulo",
+    ),
+    (
+        2,
+        "-SC",
+        "Segunda Chamada",
+    ),
+    (
+        3,
+        "-PF",
+        "Prova Final",
+    ),
+    (
+        4,
+        "-PE",
+        "Prova Especial",
+    ),
+    (
+        5,
+        "-SI",
+        "Simulado",
+    ),
 )
 
 
-# ============================================================================
+# =============================================================================
 # IMPORTADOR
-# ============================================================================
-
+# =============================================================================
 
 class ImportadorUnidadesAvaliacaoRegras:
     """
-    Gera unidades de avaliação para o Qstione.
+    Gera unidades de avaliação para todas as disciplinas efetivamente
+    ofertadas pelas turmas válidas.
 
-    O processo possui quatro etapas:
+    O processamento mantém separado:
 
-        1. Buscar turmas/disciplina.
-        2. Resolver o currículo através da LY_GRADE.
-        3. Aplicar as regras de avaliação.
-        4. Reconstruir a tabela do Qstione.
+        curso original
+        currículo original
+        turno original
+        curso unificado
+
+    durante as etapas em que essa distinção é necessária.
     """
 
-    NOME_TABELA = "imp_013_unidades_avaliacao"
+    NOME_TABELA = (
+        "imp_013_unidades_avaliacao"
+    )
 
-    # ========================================================================
+    # =========================================================================
+    # INIT
+    # =========================================================================
+
+    def __init__(self):
+        """
+        Inicializa os placeholders utilizados nas consultas SQL.
+        """
+
+        self.periodos_placeholders = ",".join(
+            "?"
+            for _ in PERIODOS_VIGENTES
+        )
+
+        self.faculdades_placeholders = ",".join(
+            "?"
+            for _ in FACULDADES_INCLUIDAS
+        )
+
+    # =========================================================================
     # TABELA
-    # ========================================================================
+    # =========================================================================
 
     def _tabela_existe(self) -> bool:
         """
-        Verifica se a tabela de destino existe.
-
-        Returns
-        -------
-        bool
-            True se a tabela existir.
+        Verifica se a tabela destino existe.
         """
 
-        with get_db_connection(database_name="qstione") as conn:
-            resultado = conn.execute(
+        with get_db_connection(
+            database_name="qstione"
+        ) as conn:
+
+            row = conn.execute(
                 """
                 SELECT 1
                 FROM INFORMATION_SCHEMA.TABLES
                 WHERE TABLE_NAME = ?
+                  AND TABLE_TYPE = 'BASE TABLE'
                 """,
-                (self.NOME_TABELA,),
+                (
+                    self.NOME_TABELA,
+                ),
             ).fetchone()
 
-        return resultado is not None
+        return row is not None
 
-    # ========================================================================
+    # =========================================================================
 
     def _criar_tabela(self) -> None:
         """
-        Cria a tabela de destino caso ela não exista.
+        Cria a tabela destino caso ela não exista.
         """
 
         if self._tabela_existe():
             return
 
-        with get_db_connection(database_name="qstione") as conn:
+        logger.info(
+            "🆕 Criando tabela %s...",
+            self.NOME_TABELA,
+        )
+
+        with get_db_connection(
+            database_name="qstione"
+        ) as conn:
+
             conn.execute(
                 f"""
                 CREATE TABLE {self.NOME_TABELA} (
+
                     codigoUnidade NVARCHAR(200) NOT NULL,
+
                     nomeUnidade NVARCHAR(64) NOT NULL,
+
                     codigoCurso NVARCHAR(30) NULL,
+
                     codigoDisciplina NVARCHAR(30) NULL,
+
                     ordemExibicao INT NOT NULL,
+
                     codigoAgrupamento NVARCHAR(200) NOT NULL,
-                    data_criacao DATETIME2 DEFAULT GETDATE(),
-                    data_atualizacao DATETIME2 DEFAULT GETDATE(),
-                    PRIMARY KEY (codigoUnidade)
+
+                    data_criacao DATETIME2
+                        DEFAULT GETDATE(),
+
+                    data_atualizacao DATETIME2
+                        DEFAULT GETDATE(),
+
+                    PRIMARY KEY (
+                        codigoUnidade
+                    )
                 )
                 """
             )
@@ -377,442 +553,86 @@ class ImportadorUnidadesAvaliacaoRegras:
             conn.commit()
 
         logger.info(
-            "🆕 Tabela %s criada.",
-            self.NOME_TABELA,
+            "✅ Tabela criada."
         )
 
-    # ========================================================================
-    # FILTROS
-    # ========================================================================
+    # =========================================================================
+    # NORMALIZAÇÃO
+    # =========================================================================
 
     @staticmethod
-    def _normalizar_lista_filtro(
-        valores: Iterable[Any],
-    ) -> List[str]:
-        """
-        Normaliza uma lista utilizada nos filtros.
-
-        Parameters
-        ----------
-        valores:
-            Lista de valores.
-
-        Returns
-        -------
-        list[str]
-            Valores convertidos para strings.
-        """
-
-        resultado: List[str] = []
-
-        for valor in valores:
-            if valor is None:
-                continue
-
-            valor = str(valor).strip()
-
-            if valor:
-                resultado.append(valor)
-
-        return resultado
-
-    # ========================================================================
-    # BUSCA DE TURMAS
-    # ========================================================================
-
-    def obter_turmas(self) -> List[Dict[str, Any]]:
-        """
-        Busca as turmas/disciplina do período solicitado.
-
-        A faculdade é obtida exclusivamente de LY_CURSO.
-
-        Isso evita trazer cursos de outras faculdades que possuem códigos
-        que não fazem parte do MAPEAMENTO_CURSOS utilizado neste projeto.
-
-        Returns
-        -------
-        list[dict]
-            Turmas encontradas.
-        """
-
-        ano = str(ANO).strip()
-
-        periodos = self._normalizar_lista_filtro(
-            PERIODOS
-        )
-
-        faculdades = self._normalizar_lista_filtro(
-            FACULDADES
-        )
-
-        if not periodos:
-            raise ValueError(
-                "PERIODOS não pode estar vazio."
-            )
-
-        if not faculdades:
-            raise ValueError(
-                "FACULDADES não pode estar vazio."
-            )
-
-        placeholders_periodos = ",".join(
-            "?" for _ in periodos
-        )
-
-        placeholders_faculdades = ",".join(
-            "?" for _ in faculdades
-        )
-
-        sql = f"""
-            SELECT DISTINCT
-                t.ano,
-                t.semestre,
-                t.turma,
-                t.disciplina,
-                t.curso,
-                c.nome AS nome_curso,
-                c.faculdade
-            FROM LY_TURMA t
-            INNER JOIN LY_CURSO c
-                ON c.curso = t.curso
-            WHERE t.ano = ?
-              AND t.semestre IN ({placeholders_periodos})
-              AND c.faculdade IN ({placeholders_faculdades})
-              AND t.disciplina IS NOT NULL
-        """
-
-        parametros = [
-            ano,
-            *periodos,
-            *faculdades,
-        ]
-
-        logger.info(
-            "🔎 Buscando turmas no Lyceum..."
-        )
-
-        logger.info(
-            "   ANO=%s | PERIODOS=%s | FACULDADES=%s",
-            ano,
-            periodos,
-            faculdades,
-        )
-
-        try:
-            with get_db_connection(
-                database_name="lyceum"
-            ) as conn:
-
-                rows = conn.execute(
-                    sql,
-                    parametros,
-                ).fetchall()
-
-        except Exception as exc:
-            logger.error(
-                "❌ Erro ao consultar LY_TURMA/LY_CURSO: %s",
-                exc,
-            )
-            raise
-
-        colunas = [
-            "ano",
-            "semestre",
-            "turma",
-            "disciplina",
-            "curso",
-            "nome_curso",
-            "faculdade",
-        ]
-
-        dados = [
-            dict(zip(colunas, row))
-            for row in rows
-        ]
-
-        logger.info(
-            "📊 Turmas encontradas: %d",
-            len(dados),
-        )
-
-        return dados
-
-    # ========================================================================
-    # BUSCA DA GRADE
-    # ========================================================================
-
-    def obter_grade(self) -> List[Dict[str, Any]]:
-        """
-        Busca a estrutura curricular da LY_GRADE.
-
-        A LY_GRADE fornece:
-
-            curriculo
-            curso
-            disciplina
-            turno
-
-        O identificador lógico do currículo será construído posteriormente
-        como:
-
-            curriculo-curso-turno
-
-        Returns
-        -------
-        list[dict]
-            Registros da grade curricular.
-        """
-
-        sql = """
-            SELECT
-                curriculo,
-                curso,
-                disciplina,
-                turno
-            FROM LY_GRADE
-            WHERE curriculo IS NOT NULL
-              AND curso IS NOT NULL
-              AND disciplina IS NOT NULL
-              AND turno IS NOT NULL
-        """
-
-        logger.info(
-            "🔎 Carregando LY_GRADE..."
-        )
-
-        try:
-            with get_db_connection(
-                database_name="lyceum"
-            ) as conn:
-
-                rows = conn.execute(
-                    sql
-                ).fetchall()
-
-        except Exception as exc:
-            logger.error(
-                "❌ Erro ao consultar LY_GRADE: %s",
-                exc,
-            )
-            raise
-
-        colunas = [
-            "curriculo",
-            "curso",
-            "disciplina",
-            "turno",
-        ]
-
-        dados = [
-            dict(zip(colunas, row))
-            for row in rows
-        ]
-
-        logger.info(
-            "📊 Registros de LY_GRADE carregados: %d",
-            len(dados),
-        )
-
-        return dados
-
-    # ========================================================================
-    # ID DO CURRÍCULO
-    # ========================================================================
-
-    @staticmethod
-    def gerar_id_curriculo(
-        curriculo: Any,
-        curso: Any,
-        turno: Any,
+    def _normalizar_valor(
+        valor: Any
     ) -> str:
         """
-        Gera o identificador lógico do currículo.
-
-        Formato:
-
-            curriculo-curso-turno
-
-        Exemplo:
-
-            20152-014-MV
+        Converte um valor para string limpa.
 
         Parameters
         ----------
-        curriculo:
-            Código do currículo.
-
-        curso:
-            Código do curso.
-
-        turno:
-            Turno.
+        valor:
+            Valor original.
 
         Returns
         -------
         str
-            Identificador lógico do currículo.
+            Valor normalizado.
         """
 
-        curriculo = str(
-            curriculo or ""
-        ).strip()
-
-        curso = str(
-            curso or ""
-        ).strip()
-
-        turno = str(
-            turno or ""
-        ).strip()
-
-        if not curriculo or not curso or not turno:
+        if valor is None:
             return ""
 
-        return (
-            f"{curriculo}-{curso}-{turno}"
-        )
+        return str(
+            valor
+        ).strip()
 
-    # ========================================================================
-    # ÍNDICE DA GRADE
-    # ========================================================================
-
-    def construir_indice_grade(
-        self,
-        grade: List[Dict[str, Any]],
-    ) -> Dict[Tuple[str, str], Set[str]]:
-        """
-        Constrói um índice da LY_GRADE.
-
-        A chave do índice é:
-
-            (curso, disciplina)
-
-        O valor é o conjunto de IDs de currículo encontrados.
-
-        Exemplo:
-
-            (
-                "014",
-                "DISC001"
-            )
-            ->
-            {
-                "20261-014-MV",
-                "20251-014-MV"
-            }
-
-        Parameters
-        ----------
-        grade:
-            Registros da LY_GRADE.
-
-        Returns
-        -------
-        dict
-            Índice de currículo por curso/disciplina.
-        """
-
-        indice: Dict[
-            Tuple[str, str],
-            Set[str]
-        ] = {}
-
-        for registro in grade:
-
-            curso = str(
-                registro.get("curso") or ""
-            ).strip()
-
-            disciplina = str(
-                registro.get("disciplina") or ""
-            ).strip()
-
-            curriculo = str(
-                registro.get("curriculo") or ""
-            ).strip()
-
-            turno = str(
-                registro.get("turno") or ""
-            ).strip()
-
-            if not curso:
-                continue
-
-            if not disciplina:
-                continue
-
-            id_curriculo = self.gerar_id_curriculo(
-                curriculo,
-                curso,
-                turno,
-            )
-
-            if not id_curriculo:
-                continue
-
-            chave = (
-                curso,
-                disciplina,
-            )
-
-            indice.setdefault(
-                chave,
-                set(),
-            ).add(
-                id_curriculo
-            )
-
-        logger.info(
-            "📚 Combinações curso/disciplina indexadas: %d",
-            len(indice),
-        )
-
-        return indice
-
-    # ========================================================================
+    # =========================================================================
     # CURSO
-    # ========================================================================
+    # =========================================================================
 
     @staticmethod
     def normalizar_curso(
-        curso: Any,
+        curso: Any
     ) -> Tuple[str, str]:
         """
-        Converte o curso original para o curso unificado.
+        Converte o curso ORIGINAL para o curso utilizado pelo Qstione.
+
+        IMPORTANTE:
+        Esta função deve ser chamada somente depois que informações
+        dependentes do código original já tiverem sido resolvidas.
 
         Regras:
 
-            NULL/vazio
-                -> 999 / COMPARTILHADA
+            NULL
+            vazio
+            999
 
-            curso encontrado no mapeamento
-                -> código/nome do mapeamento
+        tornam-se:
 
-            curso não encontrado
-                -> 999 / COMPARTILHADA
+            999 / COMPARTILHADA
 
-        Parameters
-        ----------
-        curso:
-            Código original.
+        Cursos existentes no MAPEAMENTO_CURSOS são unificados.
 
-        Returns
-        -------
-        tuple[str, str]
-            Código e nome do curso unificado.
+        Um código não mapeado não é aceito como curso final e é tratado
+        como compartilhado.
         """
 
-        if curso is None:
+        curso = (
+            str(curso).strip()
+            if curso is not None
+            else ""
+        )
+
+        if not curso:
+
             return (
-                "999",
+                CURSO_COMPARTILHADO,
                 "COMPARTILHADA",
             )
 
-        curso = str(curso).strip()
+        if curso == CURSO_COMPARTILHADO:
 
-        if not curso:
             return (
-                "999",
+                CURSO_COMPARTILHADO,
                 "COMPARTILHADA",
             )
 
@@ -823,14 +643,13 @@ class ImportadorUnidadesAvaliacaoRegras:
         if mapeamento is None:
 
             logger.warning(
-                "⚠️ Curso %s pertence à faculdade filtrada, "
-                "mas não está no MAPEAMENTO_CURSOS. "
-                "Usando 999 - COMPARTILHADA.",
+                "⚠️ Curso %s não encontrado no MAPEAMENTO_CURSOS. "
+                "Convertendo para 999.",
                 curso,
             )
 
             return (
-                "999",
+                CURSO_COMPARTILHADO,
                 "COMPARTILHADA",
             )
 
@@ -841,58 +660,643 @@ class ImportadorUnidadesAvaliacaoRegras:
             str(nome).strip(),
         )
 
-    # ========================================================================
-    # RESOLUÇÃO DO CURRÍCULO
-    # ========================================================================
+    # =========================================================================
+    # TURMAS
+    # =========================================================================
 
-    @staticmethod
-    def resolver_curriculos(
-        curso_original: Any,
-        disciplina: Any,
-        indice_grade: Dict[Tuple[str, str], Set[str]],
-    ) -> Set[str]:
+    def obter_turmas(self) -> List[Dict[str, Any]]:
         """
-        Localiza os currículos da disciplina através da LY_GRADE.
+        Obtém todas as turmas válidas para os filtros.
 
-        Parameters
-        ----------
-        curso_original:
-            Código original do curso.
+        LY_TURMA é a fonte de verdade da oferta.
 
-        disciplina:
-            Código da disciplina.
+        Uma tabela complementar não pode eliminar uma turma válida.
 
-        indice_grade:
-            Índice construído a partir da LY_GRADE.
+        Para curso real:
+            LY_CURSO.faculdade deve estar em FACULDADES_INCLUIDAS.
+
+        Para curso NULL/vazio/999:
+            a turma é tratada como compartilhada.
 
         Returns
         -------
-        set[str]
-            IDs lógicos dos currículos.
+        list[dict]
+            Turmas na ordem da consulta.
         """
 
-        curso = str(
+        if not PERIODOS_VIGENTES:
+            raise ValueError(
+                "PERIODOS_VIGENTES não pode estar vazio."
+            )
+
+        if not FACULDADES_INCLUIDAS:
+            raise ValueError(
+                "FACULDADES_INCLUIDAS não pode estar vazio."
+            )
+
+        sql = f"""
+            SELECT DISTINCT
+
+                t.ano,
+
+                t.semestre,
+
+                t.turma,
+
+                t.disciplina,
+
+                t.curso,
+
+                c.nome AS nome_curso,
+
+                c.faculdade
+
+            FROM LY_TURMA t
+
+            LEFT JOIN LY_CURSO c
+                ON c.curso = t.curso
+
+            WHERE t.ano = ?
+
+              AND t.semestre IN (
+                  {self.periodos_placeholders}
+              )
+
+              AND t.sit_turma = ?
+
+              AND t.disciplina IS NOT NULL
+
+              AND LTRIM(RTRIM(
+                  CAST(t.disciplina AS NVARCHAR(100))
+              )) <> ''
+
+              AND (
+
+                    t.curso IS NULL
+
+                    OR LTRIM(RTRIM(
+                        CAST(t.curso AS NVARCHAR(30))
+                    )) = ''
+
+                    OR LTRIM(RTRIM(
+                        CAST(t.curso AS NVARCHAR(30))
+                    )) = '999'
+
+                    OR c.faculdade IN (
+                        {self.faculdades_placeholders}
+                    )
+              )
+
+            ORDER BY
+
+                t.ano,
+
+                t.semestre,
+
+                t.turma,
+
+                t.disciplina
+        """
+
+        params = (
+            ANO_VIGENTE,
+            *PERIODOS_VIGENTES,
+            SITUACAO_TURMA_VALIDA,
+            *FACULDADES_INCLUIDAS,
+        )
+
+        logger.info(
+            "🔎 Consultando LY_TURMA..."
+        )
+
+        with get_db_connection(
+            database_name="lyceum"
+        ) as conn:
+
+            rows = conn.execute(
+                sql,
+                params
+            ).fetchall()
+
+        colunas = (
+            "ano",
+            "semestre",
+            "turma",
+            "disciplina",
+            "curso",
+            "nome_curso",
+            "faculdade",
+        )
+
+        dados = [
+            dict(
+                zip(
+                    colunas,
+                    row
+                )
+            )
+            for row in rows
+        ]
+
+        logger.info(
+            "📊 Turmas válidas encontradas: %d",
+            len(dados),
+        )
+
+        return dados
+
+    # =========================================================================
+    # GRADE
+    # =========================================================================
+
+    def obter_grade_das_ofertas(
+        self,
+        turmas: List[Dict[str, Any]]
+    ) -> Dict[
+        Tuple[str, str],
+        List[Dict[str, Any]]
+    ]:
+        """
+        Consulta LY_GRADE somente para as combinações de curso ORIGINAL
+        e disciplina existentes nas ofertas.
+
+        A chave utilizada é:
+
+            (curso_original, disciplina)
+
+        O curso não é unificado antes da consulta.
+
+        Returns
+        -------
+        dict
+            Índice:
+
+                (curso_original, disciplina)
+                    ->
+                lista de registros de grade
+        """
+
+        pares = []
+
+        vistos = set()
+
+        for turma in turmas:
+
+            disciplina = self._normalizar_valor(
+                turma.get(
+                    "disciplina"
+                )
+            )
+
+            curso = self._normalizar_valor(
+                turma.get(
+                    "curso"
+                )
+            )
+
+            if not disciplina:
+                continue
+
+            if not curso:
+                continue
+
+            if curso == CURSO_COMPARTILHADO:
+                continue
+
+            chave = (
+                curso,
+                disciplina,
+            )
+
+            if chave in vistos:
+                continue
+
+            vistos.add(
+                chave
+            )
+
+            pares.append(
+                chave
+            )
+
+        if not pares:
+
+            logger.info(
+                "📚 Nenhuma combinação curso/disciplina requer LY_GRADE."
+            )
+
+            return {}
+
+        condicoes = []
+
+        params = []
+
+        for curso, disciplina in pares:
+
+            condicoes.append(
+                """
+                (
+                    LTRIM(RTRIM(
+                        CAST(g.curso AS NVARCHAR(30))
+                    )) = ?
+
+                    AND LTRIM(RTRIM(
+                        CAST(g.disciplina AS NVARCHAR(100))
+                    )) = ?
+                )
+                """
+            )
+
+            params.extend(
+                [
+                    curso,
+                    disciplina,
+                ]
+            )
+
+        sql = f"""
+            SELECT
+
+                g.curriculo,
+
+                g.curso,
+
+                g.disciplina,
+
+                g.turno,
+
+                g.serie_ideal
+
+            FROM LY_GRADE g
+
+            WHERE
+                {" OR ".join(condicoes)}
+
+            ORDER BY
+
+                g.curso,
+
+                g.disciplina,
+
+                g.curriculo,
+
+                g.turno
+        """
+
+        logger.info(
+            "🔎 Consultando LY_GRADE para %d combinações...",
+            len(pares),
+        )
+
+        with get_db_connection(
+            database_name="lyceum"
+        ) as conn:
+
+            rows = conn.execute(
+                sql,
+                params
+            ).fetchall()
+
+        indice = {}
+
+        for (
+            curriculo,
+            curso,
+            disciplina,
+            turno,
+            serie_ideal,
+        ) in rows:
+
+            curso = self._normalizar_valor(
+                curso
+            )
+
+            disciplina = self._normalizar_valor(
+                disciplina
+            )
+
+            curriculo = self._normalizar_valor(
+                curriculo
+            )
+
+            turno = self._normalizar_valor(
+                turno
+            )
+
+            if not curso or not disciplina:
+                continue
+
+            chave = (
+                curso,
+                disciplina,
+            )
+
+            indice.setdefault(
+                chave,
+                []
+            ).append(
+                {
+                    "curriculo":
+                        curriculo,
+
+                    "curso":
+                        curso,
+
+                    "disciplina":
+                        disciplina,
+
+                    "turno":
+                        turno,
+
+                    "serie_ideal":
+                        serie_ideal,
+                }
+            )
+
+        logger.info(
+            "📚 Combinações com grade encontradas: %d",
+            len(indice),
+        )
+
+        return indice
+
+    # =========================================================================
+    # ID CURRÍCULO
+    # =========================================================================
+
+    @staticmethod
+    def gerar_id_curriculo(
+        curriculo: Any,
+        curso_original: Any,
+        turno_original: Any,
+    ) -> str:
+        """
+        Gera o identificador único do currículo.
+
+        A identidade é:
+
+            curriculo + curso ORIGINAL + turno ORIGINAL
+
+        Exemplo:
+
+            20261 + 014 + MV
+
+        resulta:
+
+            20261-014-MV
+
+        Nenhum mapeamento de curso é aplicado nesta função.
+        """
+
+        curriculo = str(
+            curriculo or ""
+        ).strip()
+
+        curso_original = str(
             curso_original or ""
         ).strip()
 
-        disciplina = str(
-            disciplina or ""
+        turno_original = str(
+            turno_original or ""
         ).strip()
 
-        if not curso or not disciplina:
-            return set()
+        if (
+            not curriculo
+            or not curso_original
+            or not turno_original
+        ):
+            return ""
 
-        return indice_grade.get(
-            (
-                curso,
-                disciplina,
-            ),
-            set(),
+        return (
+            f"{curriculo}-"
+            f"{curso_original}-"
+            f"{turno_original}"
         )
 
-    # ========================================================================
+    # =========================================================================
+    # RESOLVER CONTEXTOS CURRICULARES
+    # =========================================================================
+
+    def resolver_contextos_curriculares(
+        self,
+        curso_original: Any,
+        disciplina: Any,
+        indice_grade,
+    ) -> List[Dict[str, Any]]:
+        """
+        Resolve os contextos curriculares de uma disciplina.
+
+        A busca utiliza:
+
+            curso ORIGINAL
+            disciplina
+
+        Depois agrupa por:
+
+            curriculo
+            curso original
+            turno original
+
+        Para cada contexto, a menor série é mantida.
+
+        A ordem da primeira ocorrência na LY_GRADE é preservada.
+
+        Returns
+        -------
+        list[dict]
+            Contextos curriculares.
+        """
+
+        curso_original = self._normalizar_valor(
+            curso_original
+        )
+
+        disciplina = self._normalizar_valor(
+            disciplina
+        )
+
+        if (
+            not curso_original
+            or curso_original == CURSO_COMPARTILHADO
+            or not disciplina
+        ):
+            return []
+
+        registros = indice_grade.get(
+            (
+                curso_original,
+                disciplina,
+            ),
+            []
+        )
+
+        if not registros:
+            return []
+
+        contextos = {}
+
+        ordem_contextos = []
+
+        for registro in registros:
+
+            curriculo = self._normalizar_valor(
+                registro.get(
+                    "curriculo"
+                )
+            )
+
+            curso_grade = self._normalizar_valor(
+                registro.get(
+                    "curso"
+                )
+            )
+
+            turno = self._normalizar_valor(
+                registro.get(
+                    "turno"
+                )
+            )
+
+            if not curriculo:
+                continue
+
+            if not curso_grade:
+                continue
+
+            if not turno:
+                continue
+
+            # ---------------------------------------------------------------
+            # O curso da grade precisa ser exatamente o curso original
+            # da oferta.
+            # ---------------------------------------------------------------
+
+            if curso_grade != curso_original:
+                continue
+
+            id_curriculo = (
+                self.gerar_id_curriculo(
+                    curriculo,
+                    curso_grade,
+                    turno,
+                )
+            )
+
+            if not id_curriculo:
+                continue
+
+            chave = (
+                curriculo,
+                curso_grade,
+                turno,
+            )
+
+            serie = registro.get(
+                "serie_ideal"
+            )
+
+            serie = converter_inteiro(
+                serie
+            )
+
+            if serie is not None and serie <= 0:
+                serie = None
+
+            # ---------------------------------------------------------------
+            # PRIMEIRA OCORRÊNCIA
+            # ---------------------------------------------------------------
+
+            if chave not in contextos:
+
+                contextos[chave] = {
+                    "id_curriculo":
+                        id_curriculo,
+
+                    "curriculo":
+                        curriculo,
+
+                    "curso_original":
+                        curso_grade,
+
+                    "turno_original":
+                        turno,
+
+                    "serie_ideal":
+                        serie,
+                }
+
+                ordem_contextos.append(
+                    chave
+                )
+
+                continue
+
+            # ---------------------------------------------------------------
+            # MESMO CONTEXTO:
+            # manter a menor série.
+            # ---------------------------------------------------------------
+
+            existente = contextos[
+                chave
+            ]
+
+            serie_existente = (
+                existente.get(
+                    "serie_ideal"
+                )
+            )
+
+            if serie is None:
+                continue
+
+            if (
+                serie_existente is None
+                or serie < serie_existente
+            ):
+
+                existente[
+                    "serie_ideal"
+                ] = serie
+
+        return [
+            contextos[chave]
+            for chave in ordem_contextos
+        ]
+
+    # =========================================================================
+    # MENOR SÉRIE
+    # =========================================================================
+
+    @staticmethod
+    def resolver_periodo(
+        serie_ideal: Optional[int]
+    ) -> int:
+        """
+        Converte serie_ideal para o período utilizado pelo Qstione.
+
+        Quando não existe uma série válida, utiliza 1.
+
+        Quando a série é menor ou igual a zero, utiliza 1.
+        """
+
+        if serie_ideal is None:
+            return 1
+
+        serie_ideal = converter_inteiro(
+            serie_ideal
+        )
+
+        if serie_ideal is None:
+            return 1
+
+        if serie_ideal <= 0:
+            return 1
+
+        return serie_ideal
+
+    # =========================================================================
     # REGRA DE AVALIAÇÃO
-    # ========================================================================
+    # =========================================================================
 
     @staticmethod
     def obter_avaliacoes(
@@ -900,23 +1304,23 @@ class ImportadorUnidadesAvaliacaoRegras:
         id_curriculo: str,
     ) -> Tuple[
         str,
-        Tuple[Tuple[int, str, str], ...]
+        Tuple[
+            Tuple[int, str, str],
+            ...
+        ],
     ]:
         """
-        Determina a regra de avaliação.
+        Determina o modelo de avaliação.
 
-        Parameters
-        ----------
-        codigo_curso:
-            Código unificado do curso.
+        A decisão utiliza o curso UNIFICADO.
 
-        id_curriculo:
-            Identificador lógico do currículo.
+        Medicina utiliza o ID completo do currículo:
 
-        Returns
-        -------
-        tuple
-            Nome da regra e avaliações correspondentes.
+            curriculo-curso-original-turno
+
+        Engenharia utiliza somente o curso unificado.
+
+        Os demais cursos utilizam a regra geral.
         """
 
         codigo_curso = str(
@@ -927,61 +1331,93 @@ class ImportadorUnidadesAvaliacaoRegras:
             id_curriculo or ""
         ).strip()
 
-        # --------------------------------------------------------------------
+        # =====================================================================
         # MEDICINA
-        # --------------------------------------------------------------------
+        # =====================================================================
 
-        if codigo_curso == CODIGO_CURSO_MEDICINA:
+        if codigo_curso == CURSO_MEDICINA:
 
-            if id_curriculo in CURRICULOS_MEDICINA_NOVOS:
-                return (
-                    "MEDICINA_NOVO",
-                    AVALIACOES_MEDICINA_NOVO,
-                )
+            if (
+                id_curriculo
+                in CURRICULOS_MEDICINA_ANTIGO
+            ):
 
-            if id_curriculo in CURRICULOS_MEDICINA_ANTIGOS:
                 return (
                     "MEDICINA_ANTIGO",
                     AVALIACOES_MEDICINA_ANTIGO,
                 )
 
-            # Um currículo de Medicina que não esteja cadastrado não deve
-            # receber silenciosamente a regra de Medicina nova ou antiga.
-            #
-            # Neste caso usamos a regra geral e registramos o problema.
-            logger.warning(
-                "⚠️ Currículo de Medicina não cadastrado: %s",
-                id_curriculo or "<NULL>",
+            if (
+                id_curriculo
+                in CURRICULOS_MEDICINA_NOVOS
+            ):
+
+                return (
+                    "MEDICINA_NOVO",
+                    AVALIACOES_MEDICINA_NOVO,
+                )
+
+            # -------------------------------------------------------------
+            # Currículos futuros de Medicina
+            # -------------------------------------------------------------
+
+            partes = id_curriculo.split(
+                "-"
             )
+
+            if partes:
+
+                try:
+
+                    codigo_curriculo = int(
+                        partes[0]
+                    )
+
+                except ValueError:
+
+                    codigo_curriculo = None
+
+                if (
+                    codigo_curriculo is not None
+                    and codigo_curriculo > 20231
+                ):
+
+                    return (
+                        "MEDICINA_NOVO",
+                        AVALIACOES_MEDICINA_NOVO,
+                    )
 
             return (
-                "GERAL_MEDICINA_CURRICULO_NAO_MAPEADO",
-                AVALIACOES_GERAIS,
+                "MEDICINA_NAO_MAPEADO",
+                (),
             )
 
-        # --------------------------------------------------------------------
+        # =====================================================================
         # ENGENHARIA
-        # --------------------------------------------------------------------
+        # =====================================================================
 
-        if codigo_curso in CURSOS_ENGENHARIA:
+        if (
+            codigo_curso
+            in CURSOS_ENGENHARIA
+        ):
 
             return (
                 "ENGENHARIA",
                 AVALIACOES_ENGENHARIA,
             )
 
-        # --------------------------------------------------------------------
+        # =====================================================================
         # GERAL
-        # --------------------------------------------------------------------
+        # =====================================================================
 
         return (
             "GERAL",
             AVALIACOES_GERAIS,
         )
 
-    # ========================================================================
-    # CÓDIGO DA DISCIPLINA
-    # ========================================================================
+    # =========================================================================
+    # CÓDIGO DISCIPLINA
+    # =========================================================================
 
     @staticmethod
     def gerar_codigo_disciplina(
@@ -990,24 +1426,8 @@ class ImportadorUnidadesAvaliacaoRegras:
         nome_curso: str,
     ) -> str:
         """
-        Gera o código da disciplina utilizando exatamente a função usada
-        pelo imp_002_disciplina.
-
-        Parameters
-        ----------
-        disciplina:
-            Código original da disciplina.
-
-        codigo_curso:
-            Curso unificado.
-
-        nome_curso:
-            Nome unificado.
-
-        Returns
-        -------
-        str
-            Código da disciplina.
+        Gera o código da disciplina utilizando a mesma função
+        utilizada pelos demais importadores.
         """
 
         disciplina = str(
@@ -1017,10 +1437,12 @@ class ImportadorUnidadesAvaliacaoRegras:
         if not disciplina:
             return ""
 
-        codigo = gerar_codigo_disciplina_curso(
-            disciplina,
-            nome_curso,
-            codigo_curso,
+        codigo = (
+            gerar_codigo_disciplina_curso(
+                disciplina,
+                nome_curso,
+                codigo_curso,
+            )
         )
 
         return truncar_texto(
@@ -1028,67 +1450,97 @@ class ImportadorUnidadesAvaliacaoRegras:
             30,
         )
 
-    # ========================================================================
+    # =========================================================================
     # TRANSFORMAÇÃO
-    # ========================================================================
+    # =========================================================================
 
     def transformar_dados(
         self,
         turmas: List[Dict[str, Any]],
-        indice_grade: Dict[
-            Tuple[str, str],
-            Set[str]
-        ],
+        indice_grade,
     ) -> List[Dict[str, Any]]:
         """
-        Gera as unidades de avaliação.
+        Transforma as ofertas em unidades de avaliação.
 
-        Uma disciplina pode estar associada a mais de um currículo na
-        LY_GRADE. Cada currículo é avaliado separadamente.
+        A ordem da lista de turmas é preservada.
 
-        A duplicidade final é controlada por codigoUnidade, pois este é
-        o campo que possui PRIMARY KEY no Qstione.
+        Para cada oferta:
 
-        Parameters
-        ----------
-        turmas:
-            Turmas encontradas no período/faculdade.
+            curso original
+                ↓
+            grade do curso original
+                ↓
+            currículo original
+                ↓
+            menor série
+                ↓
+            curso unificado
+                ↓
+            regra de avaliação
+                ↓
+            unidades
 
-        indice_grade:
-            Índice curricular.
+        A mesma disciplina pode possuir vários contextos:
 
-        Returns
-        -------
-        list[dict]
-            Registros prontos para gravação.
+            DISC001 / 056
+            DISC001 / 999
+
+        e ambos são mantidos.
         """
 
-        dados: List[Dict[str, Any]] = []
+        dados = []
 
-        codigos_unidade: Set[str] = set()
+        # ---------------------------------------------------------------------
+        # Contextos processados.
+        #
+        # NÃO usamos set para ordenar.
+        # Ele serve somente para impedir processamento duplicado.
+        # ---------------------------------------------------------------------
 
-        contador_regras = Counter()
-        contador_cursos = Counter()
-        contador_curriculos = Counter()
+        contextos_processados = set()
 
-        disciplinas_sem_grade = Counter()
+        # ---------------------------------------------------------------------
+        # Evita duplicidade de codigoUnidade.
+        # ---------------------------------------------------------------------
 
-        # --------------------------------------------------------------------
-        # PROCESSAMENTO
-        # --------------------------------------------------------------------
+        codigos_unidade = set()
 
-        for item in turmas:
+        # ---------------------------------------------------------------------
+        # Estatísticas.
+        # ---------------------------------------------------------------------
 
-            disciplina = str(
-                item.get("disciplina") or ""
-            ).strip()
+        estatisticas_cursos = Counter()
+        estatisticas_regras = Counter()
+        estatisticas_curriculos = Counter()
+
+        for turma in turmas:
+
+            disciplina = self._normalizar_valor(
+                turma.get(
+                    "disciplina"
+                )
+            )
 
             if not disciplina:
                 continue
 
-            curso_original = item.get(
-                "curso"
+            curso_original = (
+                turma.get(
+                    "curso"
+                )
             )
+
+            curso_original_str = (
+                self._normalizar_valor(
+                    curso_original
+                )
+            )
+
+            # =================================================================
+            # CURSO UNIFICADO
+            #
+            # Esta operação ocorre APENAS depois da separação do curso original.
+            # =================================================================
 
             codigo_curso, nome_curso = (
                 self.normalizar_curso(
@@ -1096,61 +1548,160 @@ class ImportadorUnidadesAvaliacaoRegras:
                 )
             )
 
-            curriculos = self.resolver_curriculos(
-                curso_original,
+            # =================================================================
+            # CONTEXTO DA OFERTA
+            # =================================================================
+            #
+            # Para cursos reais:
+            #
+            #     disciplina + curso original
+            #
+            # Para compartilhada:
+            #
+            #     disciplina + 999
+            #
+            # =================================================================
+
+            contexto_oferta = (
                 disciplina,
-                indice_grade,
+                curso_original_str,
             )
 
-            # ----------------------------------------------------------------
-            # Não encontramos currículo.
-            #
-            # Para cursos diferentes de Medicina, a ausência de currículo
-            # não impede a regra geral/engenharia, porque essas regras não
-            # dependem do currículo.
-            #
-            # Para Medicina, sem currículo não é possível decidir entre
-            # antigo e novo.
-            # ----------------------------------------------------------------
+            if contexto_oferta in contextos_processados:
+                continue
 
-            if not curriculos:
+            contextos_processados.add(
+                contexto_oferta
+            )
 
-                if codigo_curso == CODIGO_CURSO_MEDICINA:
+            # =================================================================
+            # CURSO COMPARTILHADO
+            # =================================================================
+
+            if (
+                codigo_curso
+                == CURSO_COMPARTILHADO
+            ):
+
+                contextos_curriculares = [
+                    {
+                        "id_curriculo": "",
+                        "curriculo": "",
+                        "curso_original":
+                            curso_original_str,
+                        "turno_original": "",
+                        "serie_ideal": None,
+                    }
+                ]
+
+            # =================================================================
+            # CURSO REAL
+            # =================================================================
+
+            else:
+
+                contextos_curriculares = (
+                    self.resolver_contextos_curriculares(
+                        curso_original_str,
+                        disciplina,
+                        indice_grade,
+                    )
+                )
+
+                # -------------------------------------------------------------
+                # Não existe currículo na grade.
+                #
+                # Para cursos que não precisam de currículo para definir
+                # avaliação, ainda podemos gerar a regra geral.
+                #
+                # Medicina, entretanto, precisa de currículo.
+                # -------------------------------------------------------------
+
+                if not contextos_curriculares:
+
+                    contextos_curriculares = [
+                        {
+                            "id_curriculo": "",
+                            "curriculo": "",
+                            "curso_original":
+                                curso_original_str,
+                            "turno_original": "",
+                            "serie_ideal": None,
+                        }
+                    ]
+
+            # =================================================================
+            # PROCESSAMENTO DOS CONTEXTOS CURRICULARES
+            # =================================================================
+
+            for contexto in (
+                contextos_curriculares
+            ):
+
+                id_curriculo = (
+                    contexto.get(
+                        "id_curriculo"
+                    )
+                    or ""
+                )
+
+                serie_ideal = (
+                    contexto.get(
+                        "serie_ideal"
+                    )
+                )
+
+                # =============================================================
+                # MEDICINA PRECISA DE CURRÍCULO
+                # =============================================================
+
+                if (
+                    codigo_curso == CURSO_MEDICINA
+                    and not id_curriculo
+                ):
 
                     logger.warning(
-                        "⚠️ Medicina sem currículo na LY_GRADE: "
-                        "disciplina=%s | curso=%s",
+                        "⚠️ Medicina ignorada por ausência de currículo: "
+                        "disciplina=%s | curso_original=%s",
                         disciplina,
-                        curso_original,
+                        curso_original_str,
                     )
-
-                    # Não gerar avaliação de Medicina sem saber qual
-                    # currículo deve ser aplicado.
-                    disciplinas_sem_grade[
-                        (
-                            codigo_curso,
-                            disciplina,
-                        )
-                    ] += 1
 
                     continue
 
-                # ------------------------------------------------------------
-                # Cursos não-Medicina.
-                #
-                # Criamos um identificador vazio somente para a decisão da
-                # regra. O ID não é gravado na tabela.
-                # ------------------------------------------------------------
+                # =============================================================
+                # REGRA DE AVALIAÇÃO
+                # =============================================================
 
-                curriculos = {""}
+                nome_regra, avaliacoes = (
+                    self.obter_avaliacoes(
+                        codigo_curso,
+                        id_curriculo,
+                    )
+                )
 
-            # ----------------------------------------------------------------
-            # PROCESSA CADA CURRÍCULO
-            # ----------------------------------------------------------------
+                # =============================================================
+                # MEDICINA COM CURRÍCULO DESCONHECIDO
+                # =============================================================
 
-            for id_curriculo in sorted(
-                curriculos
-            ):
+                if (
+                    codigo_curso == CURSO_MEDICINA
+                    and nome_regra
+                    == "MEDICINA_NAO_MAPEADO"
+                ):
+
+                    logger.warning(
+                        "⚠️ Currículo de Medicina não mapeado: "
+                        "%s | disciplina=%s",
+                        id_curriculo,
+                        disciplina,
+                    )
+
+                    continue
+
+                # =============================================================
+                # CÓDIGO DA DISCIPLINA
+                # =============================================================
 
                 codigo_disciplina = (
                     self.gerar_codigo_disciplina(
@@ -1163,28 +1714,32 @@ class ImportadorUnidadesAvaliacaoRegras:
                 if not codigo_disciplina:
                     continue
 
-                nome_regra, avaliacoes = (
-                    self.obter_avaliacoes(
-                        codigo_curso,
-                        id_curriculo,
+                # =============================================================
+                # PERÍODO
+                # =============================================================
+
+                periodo = (
+                    self.resolver_periodo(
+                        serie_ideal
                     )
                 )
 
-                contador_regras[
-                    nome_regra
-                ] += 1
-
-                contador_cursos[
+                estatisticas_cursos[
                     codigo_curso
                 ] += 1
 
-                contador_curriculos[
-                    id_curriculo or "<SEM_CURRICULO>"
+                estatisticas_regras[
+                    nome_regra
                 ] += 1
 
-                # ------------------------------------------------------------
-                # GERA CADA AVALIAÇÃO
-                # ------------------------------------------------------------
+                estatisticas_curriculos[
+                    id_curriculo
+                    or "<SEM_CURRICULO>"
+                ] += 1
+
+                # =============================================================
+                # AVALIAÇÕES
+                # =============================================================
 
                 for (
                     ordem,
@@ -1197,19 +1752,17 @@ class ImportadorUnidadesAvaliacaoRegras:
                         200,
                     )
 
-                    # --------------------------------------------------------
-                    # DEDUPLICAÇÃO FINAL
-                    # --------------------------------------------------------
+                    # ---------------------------------------------------------
+                    # Não duplica uma unidade final.
                     #
-                    # A tabela possui PRIMARY KEY em codigoUnidade.
-                    #
-                    # Portanto, mesmo que a mesma disciplina apareça em
-                    # mais de uma turma ou mais de uma associação curricular,
-                    # não gravaremos a mesma unidade duas vezes.
-                    #
-                    # --------------------------------------------------------
+                    # A primeira relação encontrada pela ordem das ofertas
+                    # prevalece.
+                    # ---------------------------------------------------------
 
-                    if codigo_unidade in codigos_unidade:
+                    if (
+                        codigo_unidade
+                        in codigos_unidade
+                    ):
                         continue
 
                     codigos_unidade.add(
@@ -1218,222 +1771,230 @@ class ImportadorUnidadesAvaliacaoRegras:
 
                     dados.append(
                         {
-                            "codigoUnidade": codigo_unidade,
-                            "nomeUnidade": truncar_texto(
-                                nome_unidade,
-                                64,
-                            ),
-                            "codigoCurso": truncar_texto(
-                                codigo_curso,
-                                30,
-                            ),
-                            "codigoDisciplina": truncar_texto(
-                                codigo_disciplina,
-                                30,
-                            ),
-                            "ordemExibicao": (
+                            "codigoUnidade":
+                                codigo_unidade,
+
+                            "nomeUnidade":
+                                truncar_texto(
+                                    nome_unidade,
+                                    64,
+                                ),
+
+                            "codigoCurso":
+                                truncar_texto(
+                                    codigo_curso,
+                                    30,
+                                ),
+
+                            "codigoDisciplina":
+                                truncar_texto(
+                                    codigo_disciplina,
+                                    30,
+                                ),
+
+                            "ordemExibicao":
                                 converter_inteiro(
                                     ordem
-                                ) or 0
-                            ),
-                            "codigoAgrupamento": (
-                                codigo_unidade
-                            ),
-                            "regra": nome_regra,
-                            "id_curriculo": (
-                                id_curriculo
-                            ),
+                                ) or 0,
+
+                            "codigoAgrupamento":
+                                codigo_unidade,
+
+                            "periodo":
+                                periodo,
+
+                            # -------------------------------------------------
+                            # Informações auxiliares para diagnóstico.
+                            # -------------------------------------------------
+
+                            "_disciplina":
+                                disciplina,
+
+                            "_curso_original":
+                                curso_original_str,
+
+                            "_curso_unificado":
+                                codigo_curso,
+
+                            "_curriculo":
+                                id_curriculo,
+
+                            "_serie_ideal":
+                                serie_ideal,
+
+                            "_regra":
+                                nome_regra,
                         }
                     )
 
-        # --------------------------------------------------------------------
-        # LOGS
-        # --------------------------------------------------------------------
+        # =====================================================================
+        # LOG FINAL DA TRANSFORMAÇÃO
+        # =====================================================================
 
         logger.info(
-            "✅ Unidades de avaliação geradas: %d",
+            "✅ Unidades geradas: %d",
             len(dados),
         )
 
         logger.info(
-            "📋 Distribuição por regra:"
+            "📚 Contextos disciplina/curso processados: %d",
+            len(contextos_processados),
         )
 
-        for regra, quantidade in sorted(
-            contador_regras.items()
+        logger.info(
+            "📋 Regras utilizadas:"
+        )
+
+        for regra, quantidade in (
+            estatisticas_regras.items()
         ):
+
             logger.info(
-                "   %-45s %d disciplinas",
+                "   %s -> %d",
                 regra,
                 quantidade,
             )
 
         logger.info(
-            "📚 Distribuição por curso:"
+            "📚 Cursos:"
         )
 
-        for curso, quantidade in sorted(
-            contador_cursos.items()
+        for curso, quantidade in (
+            estatisticas_cursos.items()
         ):
+
             logger.info(
-                "   curso=%s -> %d ocorrências",
+                "   %s -> %d",
                 curso,
                 quantidade,
             )
 
-        if disciplinas_sem_grade:
+        logger.info(
+            "📋 Currículos:"
+        )
 
-            logger.warning(
-                "⚠️ Disciplinas de Medicina sem currículo: %d",
-                len(disciplinas_sem_grade),
+        for curriculo, quantidade in (
+            estatisticas_curriculos.items()
+        ):
+
+            logger.info(
+                "   %s -> %d",
+                curriculo,
+                quantidade,
             )
-
-            for (
-                codigo_curso,
-                disciplina,
-            ), quantidade in sorted(
-                disciplinas_sem_grade.items()
-            ):
-                logger.warning(
-                    "   curso=%s | disciplina=%s | ocorrências=%d",
-                    codigo_curso,
-                    disciplina,
-                    quantidade,
-                )
 
         return dados
 
-    # ========================================================================
+    # =========================================================================
     # VALIDAÇÃO
-    # ========================================================================
+    # =========================================================================
 
     @staticmethod
     def validar_dados(
-        dados: List[Dict[str, Any]],
+        dados: List[Dict[str, Any]]
     ) -> None:
         """
-        Valida os registros antes da gravação.
+        Valida os dados antes da gravação.
 
         Verifica:
 
-            codigoUnidade
-            codigoDisciplina
-            codigoCurso
-            duplicidade de codigoUnidade
-
-        Parameters
-        ----------
-        dados:
-            Registros transformados.
-
-        Raises
-        ------
-        ValueError
-            Quando algum registro inválido for encontrado.
+            - codigoUnidade;
+            - codigoDisciplina;
+            - codigoCurso;
+            - duplicidade de codigoUnidade.
         """
 
-        erros: List[str] = []
+        erros = []
 
-        codigos_unidade: Set[str] = set()
+        codigos = set()
 
         for indice, registro in enumerate(
             dados,
             start=1,
         ):
 
-            codigo_unidade = registro.get(
-                "codigoUnidade"
+            codigo_unidade = (
+                registro.get(
+                    "codigoUnidade"
+                )
             )
 
-            codigo_disciplina = registro.get(
-                "codigoDisciplina"
+            codigo_disciplina = (
+                registro.get(
+                    "codigoDisciplina"
+                )
             )
 
-            codigo_curso = registro.get(
-                "codigoCurso"
+            codigo_curso = (
+                registro.get(
+                    "codigoCurso"
+                )
             )
 
             if not codigo_unidade:
+
                 erros.append(
                     f"Registro {indice}: "
-                    f"codigoUnidade vazio"
+                    "codigoUnidade vazio"
                 )
 
             if not codigo_disciplina:
+
                 erros.append(
                     f"Registro {indice}: "
-                    f"codigoDisciplina vazio"
+                    "codigoDisciplina vazio"
                 )
 
             if not codigo_curso:
+
                 erros.append(
                     f"Registro {indice}: "
-                    f"codigoCurso vazio"
+                    "codigoCurso vazio"
                 )
 
             if (
                 codigo_unidade
-                and codigo_unidade in codigos_unidade
+                and codigo_unidade in codigos
             ):
+
                 erros.append(
-                    f"codigoUnidade duplicado: "
+                    "codigoUnidade duplicado: "
                     f"{codigo_unidade}"
                 )
 
             if codigo_unidade:
-                codigos_unidade.add(
+
+                codigos.add(
                     codigo_unidade
                 )
 
         if erros:
 
-            logger.error(
-                "❌ Validação encontrou %d erro(s).",
-                len(erros),
-            )
+            for erro in erros[:100]:
 
-            for erro in erros[:30]:
                 logger.error(
-                    "   %s",
-                    erro,
-                )
-
-            if len(erros) > 30:
-                logger.error(
-                    "   ... e mais %d erro(s).",
-                    len(erros) - 30,
+                    "❌ %s",
+                    erro
                 )
 
             raise ValueError(
-                "Os dados transformados falharam na validação."
+                "Falha na validação dos dados."
             )
 
         logger.info(
-            "✅ Validação concluída sem erros."
+            "✅ Validação concluída."
         )
 
-    # ========================================================================
+    # =========================================================================
     # IMPORTAÇÃO
-    # ========================================================================
+    # =========================================================================
 
     def importar_para_qstione(
         self,
-        dados_transformados: List[Dict[str, Any]],
+        dados_transformados: List[Dict[str, Any]]
     ) -> Dict[str, int]:
         """
-        Reconstrói a tabela de unidades de avaliação.
-
-        A tabela é limpa antes da carga.
-
-        Parameters
-        ----------
-        dados_transformados:
-            Registros prontos para inserção.
-
-        Returns
-        -------
-        dict
-            Resultado da carga.
+        Reconstrói a tabela imp_013_unidades_avaliacao.
         """
 
         self._criar_tabela()
@@ -1448,25 +2009,29 @@ class ImportadorUnidadesAvaliacaoRegras:
             ) as conn:
 
                 logger.info(
-                    "🧹 Limpando tabela %s...",
+                    "🧹 Limpando %s...",
                     self.NOME_TABELA,
                 )
 
                 conn.execute(
                     f"""
-                    DELETE FROM {self.NOME_TABELA}
+                    DELETE FROM
+                        {self.NOME_TABELA}
                     """
                 )
 
                 cursor = conn.cursor()
 
-                for registro in dados_transformados:
+                for registro in (
+                    dados_transformados
+                ):
 
                     try:
 
                         cursor.execute(
                             f"""
-                            INSERT INTO {self.NOME_TABELA}
+                            INSERT INTO
+                                {self.NOME_TABELA}
                             (
                                 codigoUnidade,
                                 nomeUnidade,
@@ -1493,18 +2058,23 @@ class ImportadorUnidadesAvaliacaoRegras:
                                 registro[
                                     "codigoUnidade"
                                 ],
+
                                 registro[
                                     "nomeUnidade"
                                 ],
+
                                 registro[
                                     "codigoCurso"
                                 ],
+
                                 registro[
                                     "codigoDisciplina"
                                 ],
+
                                 registro[
                                     "ordemExibicao"
                                 ],
+
                                 registro[
                                     "codigoAgrupamento"
                                 ],
@@ -1518,7 +2088,7 @@ class ImportadorUnidadesAvaliacaoRegras:
                         erros += 1
 
                         logger.error(
-                            "❌ Erro ao inserir %s: %s",
+                            "❌ Erro inserindo %s: %s",
                             registro.get(
                                 "codigoUnidade"
                             ),
@@ -1529,7 +2099,7 @@ class ImportadorUnidadesAvaliacaoRegras:
 
         except Exception as exc:
 
-            logger.error(
+            logger.exception(
                 "❌ Erro durante reconstrução: %s",
                 exc,
             )
@@ -1554,20 +2124,13 @@ class ImportadorUnidadesAvaliacaoRegras:
             ),
         }
 
-    # ========================================================================
+    # =========================================================================
     # EXECUÇÃO
-    # ========================================================================
+    # =========================================================================
 
-    def executar_importacao(
-        self,
-    ) -> List[Dict[str, Any]]:
+    def executar_importacao(self):
         """
-        Executa todo o processo.
-
-        Returns
-        -------
-        list[dict]
-            Registros gerados.
+        Executa o importador completo pelo botão PLAY do VS Code.
         """
 
         logger.info(
@@ -1579,102 +2142,105 @@ class ImportadorUnidadesAvaliacaoRegras:
         )
 
         logger.info(
-            "ANO=%s | PERIODOS=%s | FACULDADES=%s",
-            ANO,
-            PERIODOS,
-            FACULDADES,
+            "ANO=%s | PERIODOS=%s | FACULDADES=%s | SITUACAO=%s",
+            ANO_VIGENTE,
+            PERIODOS_VIGENTES,
+            FACULDADES_INCLUIDAS,
+            SITUACAO_TURMA_VALIDA,
         )
 
         logger.info(
             "=" * 100
         )
 
-        # --------------------------------------------------------------------
-        # 1. TURMAS
-        # --------------------------------------------------------------------
+        # =====================================================================
+        # 1. OBTÉM OFERTAS
+        # =====================================================================
 
-        turmas = self.obter_turmas()
+        turmas = (
+            self.obter_turmas()
+        )
 
-        # --------------------------------------------------------------------
-        # 2. GRADE CURRICULAR
-        # --------------------------------------------------------------------
+        if not turmas:
 
-        grade = self.obter_grade()
+            logger.warning(
+                "⚠️ Nenhuma turma encontrada."
+            )
 
-        # --------------------------------------------------------------------
-        # 3. ÍNDICE DA GRADE
-        # --------------------------------------------------------------------
+            self._criar_tabela()
+
+            return []
+
+        # =====================================================================
+        # 2. OBTÉM GRADES DAS OFERTAS
+        # =====================================================================
 
         indice_grade = (
-            self.construir_indice_grade(
-                grade
+            self.obter_grade_das_ofertas(
+                turmas
             )
         )
 
-        # --------------------------------------------------------------------
-        # 4. GERAÇÃO
-        # --------------------------------------------------------------------
+        # =====================================================================
+        # 3. TRANSFORMA
+        # =====================================================================
 
-        transformados = (
+        dados = (
             self.transformar_dados(
                 turmas,
                 indice_grade,
             )
         )
 
-        # --------------------------------------------------------------------
-        # 5. VALIDAÇÃO
-        # --------------------------------------------------------------------
+        # =====================================================================
+        # 4. VALIDA
+        # =====================================================================
 
         self.validar_dados(
-            transformados
+            dados
         )
 
-        # --------------------------------------------------------------------
-        # 6. GRAVAÇÃO
-        # --------------------------------------------------------------------
+        # =====================================================================
+        # 5. GRAVA
+        # =====================================================================
 
         resultado = (
             self.importar_para_qstione(
-                transformados
+                dados
             )
         )
 
-        # --------------------------------------------------------------------
-        # 7. RESUMO
-        # --------------------------------------------------------------------
+        # =====================================================================
+        # RESUMO
+        # =====================================================================
 
         logger.info(
             "=" * 100
         )
 
         logger.info(
-            "FIM imp_013_unidades_avaliacao_regras"
+            "RESUMO"
         )
 
         logger.info(
-            "Processados : %d",
-            resultado[
-                "total_processados"
-            ],
+            "Turmas encontradas : %d",
+            len(turmas),
         )
 
         logger.info(
-            "Inseridos   : %d",
+            "Unidades geradas   : %d",
+            len(dados),
+        )
+
+        logger.info(
+            "Inseridos           : %d",
             resultado[
                 "total_inseridos"
             ],
         )
 
         logger.info(
-            "Atualizados : %d",
-            resultado[
-                "total_atualizados"
-            ],
-        )
-
-        logger.info(
-            "Erros       : %d",
+            "Erros               : %d",
             resultado[
                 "total_erros"
             ],
@@ -1684,12 +2250,13 @@ class ImportadorUnidadesAvaliacaoRegras:
             "=" * 100
         )
 
-        return transformados
+        return dados
 
 
-# ============================================================================
-# EXECUÇÃO DIRETA PELO PLAY DO VS CODE
-# ============================================================================
+# =============================================================================
+# PLAY DO VS CODE
+# =============================================================================
 
 if __name__ == "__main__":
+
     ImportadorUnidadesAvaliacaoRegras().executar_importacao()
