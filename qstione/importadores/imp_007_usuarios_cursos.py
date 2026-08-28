@@ -124,9 +124,9 @@ PAPEL_NDE = "A"
 # ============================================================================
 
 PRIORIDADE_PAPEIS = {
-    PAPEL_NDE: 1,
-    PAPEL_PROFESSOR: 2,
-    PAPEL_COORDENADOR: 3,
+    PAPEL_COORDENADOR: 1,
+    PAPEL_NDE: 2,
+    PAPEL_PROFESSOR: 3,
 }
 
 

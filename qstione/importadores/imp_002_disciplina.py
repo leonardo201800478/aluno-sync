@@ -325,6 +325,16 @@ MAPEAMENTO_CURSOS = {
         "SISTEMAS DE INFORMAÇÃO"
     ),
 
+        "080": (
+        "113",
+        "TÉCNICO EM ENFERMAGEM"
+    ),
+
+        "113": (
+        "113",
+        "TÉCNICO EM ENFERMAGEM"
+    ),
+
     "999": (
         "999",
         "COMPARTILHADA"

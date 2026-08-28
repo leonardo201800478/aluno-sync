@@ -55,6 +55,8 @@ MAPEAMENTO_CURSOS = {
     '061': ('061', 'PUBLICIDADE E PROPAGANDA'),
     '025': ('025', 'SERVIÇO SOCIAL'),
     '019': ('019', 'SISTEMAS DE INFORMAÇÃO'),
+    '113': ('113', 'TÉCNICO EM ENFERMAGEM'),
+    '080': ('113', 'TÉCNICO EM ENFERMAGEM'),
     '999': ('999', 'COMPARTILHADA'),  # (não usado aqui, mas mantido por consistência)
 }
 
@@ -143,7 +145,7 @@ class ImportadorCursos:
                     ON cr.curso = mc.curso
                    AND cr.curriculo = mc.curriculo
                 WHERE c.ativo = 'S'
-                  AND c.faculdade IN ('001')
+                  AND c.faculdade IN ('001', '007')
             """
             cursor.execute(query)
             return cursor.fetchall()
