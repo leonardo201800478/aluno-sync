@@ -110,7 +110,7 @@ TABELA_LXP = "LXP_UNIFOA_1"
 DIRETORIO_EXPORTACAO = "exportacoes/lxp"
 
 ARQUIVO_CSV = (
-    "exportacoes/lxp/person.unifoa1.csv"
+    "exportacoes/lxp/person.unifoa_prod.csv"
 )
 
 ESTADO_PADRAO = "RJ"
@@ -506,9 +506,15 @@ def gerar_username(
 
 def obter_pessoas_lyceum():
     """
-    Busca todas as pessoas cadastradas na LY_PESSOA.
+    Busca as pessoas da LY_PESSOA que possuem matrícula
+    com situação 'Matriculado' na VW_ALUNO.
 
-    Não existe filtro por pessoa nesta etapa.
+    O relacionamento é feito por:
+
+        LY_PESSOA.pessoa = VW_ALUNO.pes_id_pessoa
+
+    A consulta utiliza DISTINCT para evitar duplicação de pessoas
+    que possuam mais de um registro de matrícula em VW_ALUNO.
 
     Returns
     -------
@@ -554,6 +560,14 @@ def obter_pessoas_lyceum():
             p.mailbox AS mailbox
 
         FROM LY_PESSOA p
+
+        INNER JOIN (
+            SELECT DISTINCT
+                pes_id_pessoa
+            FROM VW_ALUNO
+            WHERE Situação_Matricula = 'Matriculado'
+        ) a
+            ON a.pes_id_pessoa = p.pessoa
 
         WHERE p.pessoa IS NOT NULL
 
