@@ -1,6 +1,5 @@
-"""
-qstione/importadores/imp_010_alunos.py
 
+"""
 Importador independente para a tabela imp_010_alunos.
 
 ===============================================================================
@@ -98,6 +97,23 @@ Resultado:
 
     6980 | 006
     6980 | 999
+
+
+===============================================================================
+E-MAIL
+===============================================================================
+
+O campo emailAluno é gerado exclusivamente a partir da matrícula.
+
+Regra:
+
+    codigoCurso = 113
+        -> aluno@etecfoa.com.br
+
+    qualquer outro curso
+        -> aluno@unifoa.edu.br
+
+A comparação é realizada utilizando o código do curso já normalizado.
 
 
 ===============================================================================
@@ -581,6 +597,65 @@ class ImportadorAlunos:
         return turno_final
 
     # =========================================================================
+    # E-MAIL
+    # =========================================================================
+
+    @staticmethod
+    def _gerar_email(
+        matricula: str,
+        codigo_curso: str,
+    ) -> str:
+        """
+        Gera o e-mail institucional do aluno.
+
+        Regras:
+
+            curso 113
+                -> matricula@etecfoa.com.br
+
+            qualquer outro curso
+                -> matricula@unifoa.edu.br
+
+        A comparação do curso é feita após a normalização.
+
+        Parameters
+        ----------
+        matricula:
+            Matrícula do aluno.
+
+        codigo_curso:
+            Código de curso já normalizado.
+
+        Returns
+        -------
+        str
+            E-mail gerado.
+        """
+
+        matricula = str(
+            matricula
+        ).strip()
+
+        codigo_curso = str(
+            codigo_curso
+        ).strip()
+
+        if codigo_curso == "113":
+
+            dominio = "@etecfoa.com.br"
+
+        else:
+
+            dominio = "@unifoa.edu.br"
+
+        return truncar_texto(
+            converter_minusculas(
+                f"{matricula}{dominio}"
+            ),
+            100,
+        )
+
+    # =========================================================================
     # CONSULTA LYCEUM
     # =========================================================================
 
@@ -724,6 +799,11 @@ class ImportadorAlunos:
             6980 / 064
 
         Cada relação aluno/curso é gravada apenas uma vez.
+
+        O e-mail é gerado com base no código do curso normalizado:
+
+            113 -> @etecfoa.com.br
+            demais -> @unifoa.edu.br
         """
 
         registros = {}
@@ -732,6 +812,8 @@ class ImportadorAlunos:
         total_cursos = 0
         total_compartilhadas = 0
         total_mapeados = 0
+        total_etec = 0
+        total_unifoa = 0
 
         for (
             aluno,
@@ -855,20 +937,24 @@ class ImportadorAlunos:
             # E-MAIL
             # -----------------------------------------------------------------
 
-            dominio = (
-                "@etecfoa.com.br"
-                if str(
-                    unidade_ensino
-                ).strip() == "007"
-                else "@unifoa.edu.br"
+            email = (
+                self._gerar_email(
+                    matricula,
+                    curso_unificado,
+                )
             )
 
-            email = truncar_texto(
-                converter_minusculas(
-                    f"{matricula}{dominio}"
-                ),
-                100,
-            )
+            # -----------------------------------------------------------------
+            # ESTATÍSTICAS DE DOMÍNIO
+            # -----------------------------------------------------------------
+
+            if curso_unificado == "113":
+
+                total_etec += 1
+
+            else:
+
+                total_unifoa += 1
 
             # -----------------------------------------------------------------
             # TURNO
@@ -950,6 +1036,16 @@ class ImportadorAlunos:
         print(
             f"  🔗 Relações com curso 999: "
             f"{total_compartilhadas}"
+        )
+
+        print(
+            f"  🏫 E-mails @etecfoa.com.br: "
+            f"{total_etec}"
+        )
+
+        print(
+            f"  🏫 E-mails @unifoa.edu.br: "
+            f"{total_unifoa}"
         )
 
         return list(
@@ -1130,11 +1226,20 @@ class ImportadorAlunos:
         )
 
         print(
-            "🔄 Mapeamento de cursos: imp_002_disciplina"
+            "🔄 Mapeamento de cursos: "
+            "imp_002_disciplina"
         )
 
         print(
             "🔗 Curso NULL/999: 999"
+        )
+
+        print(
+            "📧 Curso 113: @etecfoa.com.br"
+        )
+
+        print(
+            "📧 Demais cursos: @unifoa.edu.br"
         )
 
         # ---------------------------------------------------------------------

@@ -1,3 +1,4 @@
+
 """
 qstione/importadores/imp_005_ofertas.py
 
@@ -26,17 +27,8 @@ REGRAS DE NEGÓCIO
             ↓
        COMPARTILHADA
 
-   Essas turmas podem ser mantidas porque não possuem
-   curso para validar contra LY_CURSO.
-
 6. O código da disciplina segue exatamente a regra do
-   imp_002_disciplina.py:
-
-       MAPEAMENTO_CURSOS
-            ↓
-       curso unificado + nome curso unificado
-            ↓
-       gerar_codigo_disciplina_curso()
+   imp_002_disciplina.py.
 
 7. O código da oferta segue:
        gerar_codigo_oferta(
@@ -49,8 +41,7 @@ REGRAS DE NEGÓCIO
 8. A área de conhecimento é utilizada somente como
    filtro da disciplina.
 
-9. Área NULL ou vazia é aceita, da mesma forma que
-   nos demais importadores.
+9. Área NULL ou vazia é aceita.
 
 10. REC/REP procuram uma turma regular da mesma:
         disciplina
@@ -61,10 +52,25 @@ REGRAS DE NEGÓCIO
 11. Se REC/REP não possuir uma turma regular de origem,
     o tipo passa para REG.
 
-12. Cada execução limpa integralmente a tabela antes
-    de inserir os dados novos.
+12. Cada execução reconstrói integralmente a tabela.
 
-13. O arquivo pode ser executado diretamente pelo
+13. A reconstrução da tabela é ATÔMICA:
+        DELETE + INSERTs + COMMIT
+    ocorrem na mesma transação.
+
+    Se qualquer INSERT falhar:
+        ROLLBACK
+    e a tabela permanece com os dados anteriores.
+
+14. semestreOferta é derivado dinamicamente da própria turma:
+
+        ano + "." + semestre
+
+    Exemplo:
+        2026 + 2 -> "2026.2"
+        2027 + 1 -> "2027.1"
+
+15. O arquivo pode ser executado diretamente pelo
     botão Play do VS Code.
 """
 
@@ -108,7 +114,6 @@ from qstione.core.transformacoes import (
     gerar_codigo_tipo_oferta,
     gerar_codigo_disciplina_curso,
     mapear_turno,
-    valor_fixo_2026_2,
     valor_fixo_vazio,
     truncar_texto,
 )
@@ -127,8 +132,15 @@ from qstione.importadores.imp_002_disciplina import (
 # LOG
 # =============================================================================
 
-LOG_DIR = os.path.join(ROOT, "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
+LOG_DIR = os.path.join(
+    ROOT,
+    "logs"
+)
+
+os.makedirs(
+    LOG_DIR,
+    exist_ok=True
+)
 
 LOG_FILE = os.path.join(
     LOG_DIR,
@@ -139,7 +151,9 @@ logger = logging.getLogger(
     "imp_005_ofertas"
 )
 
-logger.setLevel(logging.DEBUG)
+logger.setLevel(
+    logging.DEBUG
+)
 
 logger.handlers.clear()
 
@@ -154,7 +168,9 @@ file_handler.setFormatter(
     )
 )
 
-logger.addHandler(file_handler)
+logger.addHandler(
+    file_handler
+)
 
 logger.propagate = False
 
@@ -169,14 +185,30 @@ class ImportadorOfertas:
     cursos e disciplinas do imp_002_disciplina.py.
     """
 
+    # =========================================================================
+    # INICIALIZAÇÃO
+    # =========================================================================
+
     def __init__(self):
 
+        if not PERIODOS_VIGENTES:
+            raise ValueError(
+                "PERIODOS_VIGENTES não pode estar vazio."
+            )
+
+        if not FACULDADES_INCLUIDAS:
+            raise ValueError(
+                "FACULDADES_INCLUIDAS não pode estar vazio."
+            )
+
         self.periodos_placeholders = ",".join(
-            "?" for _ in PERIODOS_VIGENTES
+            "?"
+            for _ in PERIODOS_VIGENTES
         )
 
         self.faculdades_placeholders = ",".join(
-            "?" for _ in FACULDADES_INCLUIDAS
+            "?"
+            for _ in FACULDADES_INCLUIDAS
         )
 
         self.areas = [
@@ -186,33 +218,47 @@ class ImportadorOfertas:
         ]
 
         self.areas_placeholders = ",".join(
-            "?" for _ in self.areas
+            "?"
+            for _ in self.areas
         )
 
-        logger.info("=" * 90)
+        logger.info(
+            "=" * 90
+        )
+
         logger.info(
             "INÍCIO imp_005_ofertas"
         )
+
         logger.info(
             "ANO_VIGENTE=%s",
             ANO_VIGENTE
         )
+
         logger.info(
             "PERIODOS_VIGENTES=%s",
             PERIODOS_VIGENTES
         )
+
         logger.info(
             "FACULDADES_INCLUIDAS=%s",
             FACULDADES_INCLUIDAS
         )
+
         logger.info(
             "AREAS_CONHECIMENTO_INCLUIDAS=%s",
             AREAS_CONHECIMENTO_INCLUIDAS
         )
+
         logger.info(
             "SITUACAO_TURMA_VALIDA=%s",
             SITUACAO_TURMA_VALIDA
         )
+
+        logger.info(
+            "SEMESTRE DA OFERTA: derivado de ano.semestre da turma"
+        )
+
         logger.info(
             "LOG_FILE=%s",
             LOG_FILE
@@ -242,18 +288,36 @@ class ImportadorOfertas:
         """
 
         if curso is None:
-            return "999", "COMPARTILHADA"
+            return (
+                "999",
+                "COMPARTILHADA"
+            )
 
-        curso = str(curso).strip()
+        curso = str(
+            curso
+        ).strip()
 
         if not curso:
-            return "999", "COMPARTILHADA"
+            return (
+                "999",
+                "COMPARTILHADA"
+            )
+
+        if curso == "999":
+            return (
+                "999",
+                "COMPARTILHADA"
+            )
 
         if curso in MAPEAMENTO_CURSOS:
 
             return (
-                str(MAPEAMENTO_CURSOS[curso][0]),
-                str(MAPEAMENTO_CURSOS[curso][1]),
+                str(
+                    MAPEAMENTO_CURSOS[curso][0]
+                ),
+                str(
+                    MAPEAMENTO_CURSOS[curso][1]
+                ),
             )
 
         nome = (
@@ -262,7 +326,52 @@ class ImportadorOfertas:
             else curso
         )
 
-        return curso, nome
+        return (
+            curso,
+            nome
+        )
+
+    # =========================================================================
+    # SEMESTRE DA OFERTA
+    # =========================================================================
+
+    @staticmethod
+    def _gerar_semestre_oferta(
+        ano,
+        semestre
+    ):
+        """
+        Gera o semestre da oferta a partir da própria turma.
+
+        Exemplos:
+
+            2026 / 1 -> 2026.1
+            2026 / 2 -> 2026.2
+            2027 / 1 -> 2027.1
+
+        O valor é limitado a 6 caracteres, conforme o
+        tamanho da coluna semestreOferta.
+        """
+
+        if ano is None or semestre is None:
+            return ""
+
+        ano_texto = str(
+            ano
+        ).strip()
+
+        semestre_texto = str(
+            semestre
+        ).strip()
+
+        if not ano_texto or not semestre_texto:
+            return ""
+
+        valor = (
+            f"{ano_texto}.{semestre_texto}"
+        )
+
+        return valor[:6]
 
     # =========================================================================
     # TABELA
@@ -284,7 +393,9 @@ class ImportadorOfertas:
                         WHERE TABLE_NAME = ?
                           AND TABLE_TYPE = 'BASE TABLE'
                         """,
-                        ("imp_005_ofertas",)
+                        (
+                            "imp_005_ofertas",
+                        )
                     ).fetchone()
                     is not None
                 )
@@ -292,13 +403,13 @@ class ImportadorOfertas:
         except Exception:
 
             logger.exception(
-                "Erro verificando tabela."
+                "Erro verificando existência da tabela."
             )
 
             return False
 
     # =========================================================================
-    # ÍNDICES
+    # ÍNDICE
     # =========================================================================
 
     def _indice_existe(
@@ -319,7 +430,9 @@ class ImportadorOfertas:
                         FROM sys.indexes
                         WHERE name = ?
                         """,
-                        (nome,)
+                        (
+                            nome,
+                        )
                     ).fetchone()
                     is not None
                 )
@@ -341,6 +454,10 @@ class ImportadorOfertas:
 
         if not self._tabela_existe():
 
+            logger.info(
+                "Criando tabela imp_005_ofertas..."
+            )
+
             with get_db_connection(
                 database_name="qstione"
             ) as conn:
@@ -348,16 +465,28 @@ class ImportadorOfertas:
                 conn.execute(
                     """
                     CREATE TABLE imp_005_ofertas (
+
                         codigoOferta NVARCHAR(30) NOT NULL,
+
                         nomeOferta NVARCHAR(100) NOT NULL,
+
                         codigoDisciplina NVARCHAR(30) NOT NULL,
+
                         semestreOferta NVARCHAR(6) NOT NULL,
+
                         codigoTipoOferta NVARCHAR(3) NOT NULL,
+
                         codigoOfertaOrigem NVARCHAR(30) NULL,
+
                         turno NVARCHAR(1) NULL,
+
                         codigoIdentificacaoAVA NVARCHAR(100) NULL,
-                        data_criacao DATETIME2 DEFAULT GETDATE(),
-                        data_atualizacao DATETIME2 DEFAULT GETDATE(),
+
+                        data_criacao DATETIME2
+                            DEFAULT GETDATE(),
+
+                        data_atualizacao DATETIME2
+                            DEFAULT GETDATE(),
 
                         PRIMARY KEY (
                             codigoOferta
@@ -372,21 +501,31 @@ class ImportadorOfertas:
                 "🆕 Tabela imp_005_ofertas criada."
             )
 
+            logger.info(
+                "Tabela imp_005_ofertas criada."
+            )
+
         indices = [
 
             (
                 "idx_ofertas_disciplina",
+
                 """
                 CREATE INDEX idx_ofertas_disciplina
-                ON imp_005_ofertas(codigoDisciplina)
+                ON imp_005_ofertas(
+                    codigoDisciplina
+                )
                 """
             ),
 
             (
                 "idx_ofertas_tipo",
+
                 """
                 CREATE INDEX idx_ofertas_tipo
-                ON imp_005_ofertas(codigoTipoOferta)
+                ON imp_005_ofertas(
+                    codigoTipoOferta
+                )
                 """
             ),
 
@@ -394,7 +533,9 @@ class ImportadorOfertas:
 
         for nome, sql in indices:
 
-            if self._indice_existe(nome):
+            if self._indice_existe(
+                nome
+            ):
                 continue
 
             try:
@@ -403,13 +544,27 @@ class ImportadorOfertas:
                     database_name="qstione"
                 ) as conn:
 
-                    conn.execute(sql)
+                    conn.execute(
+                        sql
+                    )
+
                     conn.commit()
+
+                logger.info(
+                    "Índice %s criado.",
+                    nome
+                )
 
             except Exception as e:
 
                 print(
                     f"⚠️ Índice {nome}: {e}"
+                )
+
+                logger.warning(
+                    "Não foi possível criar índice %s: %s",
+                    nome,
+                    e
                 )
 
     # =========================================================================
@@ -420,8 +575,7 @@ class ImportadorOfertas:
         """
         Obtém as ofertas diretamente das turmas.
 
-        IMPORTANTE:
-        A faculdade é validada pelo curso da própria turma:
+        A faculdade é determinada por:
 
             LY_TURMA.curso
                 ↓
@@ -429,7 +583,7 @@ class ImportadorOfertas:
 
         Nunca por LY_DISCIPLINA.faculdade.
 
-        Uma turma sem curso é tratada como compartilhada (999).
+        Turma sem curso é tratada como compartilhada.
         """
 
         query = f"""
@@ -471,6 +625,24 @@ class ImportadorOfertas:
 
               AND (
                     t.curso IS NULL
+
+                    OR LTRIM(
+                        RTRIM(
+                            CAST(
+                                t.curso
+                                AS NVARCHAR(30)
+                            )
+                        )
+                    ) = ''
+
+                    OR LTRIM(
+                        RTRIM(
+                            CAST(
+                                t.curso
+                                AS NVARCHAR(30)
+                            )
+                        )
+                    ) = '999'
 
                     OR c.faculdade IN (
                         {self.faculdades_placeholders}
@@ -527,8 +699,8 @@ class ImportadorOfertas:
         Obtém turmas regulares T0* para localizar a oferta
         de origem de REC/REP.
 
-        A turma regular utiliza exatamente a mesma regra
-        de curso da consulta principal.
+        Utiliza exatamente os mesmos filtros da consulta
+        principal.
         """
 
         query = f"""
@@ -565,6 +737,24 @@ class ImportadorOfertas:
               AND (
                     t.curso IS NULL
 
+                    OR LTRIM(
+                        RTRIM(
+                            CAST(
+                                t.curso
+                                AS NVARCHAR(30)
+                            )
+                        )
+                    ) = ''
+
+                    OR LTRIM(
+                        RTRIM(
+                            CAST(
+                                t.curso
+                                AS NVARCHAR(30)
+                            )
+                        )
+                    ) = '999'
+
                     OR c.faculdade IN (
                         {self.faculdades_placeholders}
                     )
@@ -593,6 +783,10 @@ class ImportadorOfertas:
             *self.areas,
         ]
 
+        logger.info(
+            "Consultando turmas regulares T0..."
+        )
+
         with get_db_connection() as conn:
 
             rows = conn.execute(
@@ -600,7 +794,7 @@ class ImportadorOfertas:
                 params
             ).fetchall()
 
-        result = {}
+        resultado = {}
 
         for (
             disciplina,
@@ -623,17 +817,19 @@ class ImportadorOfertas:
                 curso_unificado,
             )
 
-            result.setdefault(
+            resultado.setdefault(
                 chave,
                 []
-            ).append(turma)
+            ).append(
+                turma
+            )
 
         logger.info(
             "Combinações de turmas regulares: %d",
-            len(result)
+            len(resultado)
         )
 
-        return result
+        return resultado
 
     # =========================================================================
     # TRANSFORMAÇÃO
@@ -643,6 +839,10 @@ class ImportadorOfertas:
         self,
         dados_lyceum
     ):
+        """
+        Transforma os dados do Lyceum para o layout
+        da imp_005_ofertas.
+        """
 
         turmas_regulares = (
             self.obter_turmas_regulares()
@@ -664,13 +864,18 @@ class ImportadorOfertas:
                 area_conhecimento,
             ) = registro
 
-            # -----------------------------------------------------------------
+            # =================================================================
             # DISCIPLINA
-            # -----------------------------------------------------------------
+            # =================================================================
 
             if not validar_codigo_disciplina(
                 disciplina
             ):
+                logger.warning(
+                    "Disciplina inválida ignorada: %s",
+                    disciplina
+                )
+
                 continue
 
             nome_disciplina = (
@@ -687,22 +892,29 @@ class ImportadorOfertas:
                 )
 
             if not nome_disciplina:
+
+                logger.warning(
+                    "Disciplina sem nome ignorada: %s",
+                    disciplina
+                )
+
                 continue
 
-            # -----------------------------------------------------------------
+            # =================================================================
             # CURSO
-            # -----------------------------------------------------------------
+            # =================================================================
 
-            curso_unificado, nome_curso_unificado = (
-                self._normalizar_curso(
-                    curso,
-                    nome_curso
-                )
+            (
+                curso_unificado,
+                nome_curso_unificado,
+            ) = self._normalizar_curso(
+                curso,
+                nome_curso
             )
 
-            # -----------------------------------------------------------------
+            # =================================================================
             # CÓDIGO DA DISCIPLINA
-            # -----------------------------------------------------------------
+            # =================================================================
 
             codigo_disciplina = (
                 gerar_codigo_disciplina_curso(
@@ -717,9 +929,9 @@ class ImportadorOfertas:
                 30
             )
 
-            # -----------------------------------------------------------------
+            # =================================================================
             # CÓDIGO DA OFERTA
-            # -----------------------------------------------------------------
+            # =================================================================
 
             codigo_oferta = (
                 gerar_codigo_oferta(
@@ -735,9 +947,22 @@ class ImportadorOfertas:
                 30
             )
 
-            # -----------------------------------------------------------------
+            if not codigo_oferta:
+
+                logger.warning(
+                    "Oferta sem código ignorada: "
+                    "disciplina=%s turma=%s ano=%s semestre=%s",
+                    disciplina,
+                    turma,
+                    ano,
+                    semestre
+                )
+
+                continue
+
+            # =================================================================
             # TIPO DA OFERTA
-            # -----------------------------------------------------------------
+            # =================================================================
 
             tipo = truncar_texto(
                 gerar_codigo_tipo_oferta(
@@ -748,11 +973,14 @@ class ImportadorOfertas:
 
             origem = ""
 
-            # -----------------------------------------------------------------
+            # =================================================================
             # REC / REP
-            # -----------------------------------------------------------------
+            # =================================================================
 
-            if tipo in ("REC", "REP"):
+            if tipo in (
+                "REC",
+                "REP"
+            ):
 
                 chave = (
                     disciplina,
@@ -779,6 +1007,11 @@ class ImportadorOfertas:
                         )
                     )
 
+                    origem = truncar_texto(
+                        origem,
+                        30
+                    )
+
                     break
 
                 # -------------------------------------------------------------
@@ -790,9 +1023,9 @@ class ImportadorOfertas:
 
                     tipo = "REG"
 
-            # -----------------------------------------------------------------
+            # =================================================================
             # TURNO
-            # -----------------------------------------------------------------
+            # =================================================================
 
             turno_mapeado = mapear_turno(
                 turno
@@ -809,9 +1042,32 @@ class ImportadorOfertas:
 
                 turno_mapeado = "M"
 
-            # -----------------------------------------------------------------
+            # =================================================================
+            # SEMESTRE DA OFERTA
+            # =================================================================
+
+            semestre_oferta = (
+                self._gerar_semestre_oferta(
+                    ano,
+                    semestre
+                )
+            )
+
+            if not semestre_oferta:
+
+                logger.warning(
+                    "Semestre da oferta inválido: "
+                    "ano=%s semestre=%s | oferta=%s",
+                    ano,
+                    semestre,
+                    codigo_oferta
+                )
+
+                continue
+
+            # =================================================================
             # REGISTRO
-            # -----------------------------------------------------------------
+            # =================================================================
 
             dados.append(
                 {
@@ -824,10 +1080,7 @@ class ImportadorOfertas:
 
                     "codigoDisciplina": codigo_disciplina,
 
-                    "semestreOferta": truncar_texto(
-                        valor_fixo_2026_2(None),
-                        6
-                    ),
+                    "semestreOferta": semestre_oferta,
 
                     "codigoTipoOferta": tipo,
 
@@ -857,11 +1110,13 @@ class ImportadorOfertas:
                 }
             )
 
-        # ---------------------------------------------------------------------
+        # =====================================================================
         # DEDUPLICAÇÃO
-        # ---------------------------------------------------------------------
+        # =====================================================================
 
         unicos = {}
+
+        duplicados = 0
 
         for reg in dados:
 
@@ -869,11 +1124,18 @@ class ImportadorOfertas:
                 "codigoOferta"
             ]
 
-            # A PK é codigoOferta.
-            # Mantemos o primeiro registro.
             if codigo not in unicos:
 
                 unicos[codigo] = reg
+
+            else:
+
+                duplicados += 1
+
+                logger.warning(
+                    "Oferta duplicada removida: %s",
+                    codigo
+                )
 
         resultado = list(
             unicos.values()
@@ -882,6 +1144,11 @@ class ImportadorOfertas:
         logger.info(
             "Registros transformados: %d",
             len(dados)
+        )
+
+        logger.info(
+            "Duplicidades removidas: %d",
+            duplicados
         )
 
         logger.info(
@@ -899,11 +1166,51 @@ class ImportadorOfertas:
         self,
         dados_transformados
     ):
+        """
+        Reconstrói a tabela imp_005_ofertas de forma ATÔMICA.
+
+        IMPORTANTE:
+
+        O DELETE e todos os INSERTs ocorrem na mesma transação.
+
+        Se qualquer operação falhar:
+
+            ROLLBACK
+
+        Assim, os dados anteriores continuam preservados.
+
+        Somente quando TODOS os registros forem inseridos
+        com sucesso ocorre:
+
+            COMMIT
+        """
 
         self._criar_tabela()
 
+        total_processados = len(
+            dados_transformados
+        )
+
+        if not dados_transformados:
+
+            logger.warning(
+                "Nenhum registro transformado. "
+                "A tabela NÃO será limpa."
+            )
+
+            print(
+                "⚠️ Nenhuma oferta válida encontrada."
+            )
+
+            return {
+                "total_inseridos": 0,
+                "total_atualizados": 0,
+                "total_erros": 0,
+                "total_processados": 0,
+                "rollback": False,
+            }
+
         inseridos = 0
-        erros = 0
 
         try:
 
@@ -911,83 +1218,179 @@ class ImportadorOfertas:
                 database_name="qstione"
             ) as conn:
 
-                # -------------------------------------------------------------
-                # LIMPA A TABELA
-                # -------------------------------------------------------------
-
-                conn.execute(
-                    """
-                    DELETE FROM imp_005_ofertas
-                    """
-                )
-
                 cursor = conn.cursor()
 
-                # -------------------------------------------------------------
-                # INSERT
-                # -------------------------------------------------------------
+                try:
 
-                for reg in dados_transformados:
+                    # =========================================================
+                    # INÍCIO DA RECONSTRUÇÃO
+                    # =========================================================
+
+                    logger.info(
+                        "Iniciando reconstrução transacional "
+                        "da imp_005_ofertas."
+                    )
+
+                    # ---------------------------------------------------------
+                    # LIMPA A TABELA
+                    # ---------------------------------------------------------
+
+                    cursor.execute(
+                        """
+                        DELETE FROM imp_005_ofertas
+                        """
+                    )
+
+                    logger.info(
+                        "Tabela imp_005_ofertas limpa "
+                        "dentro da transação."
+                    )
+
+                    # ---------------------------------------------------------
+                    # INSERT
+                    # ---------------------------------------------------------
+
+                    for indice, reg in enumerate(
+                        dados_transformados,
+                        start=1
+                    ):
+
+                        try:
+
+                            cursor.execute(
+                                """
+                                INSERT INTO imp_005_ofertas
+                                (
+                                    codigoOferta,
+                                    nomeOferta,
+                                    codigoDisciplina,
+                                    semestreOferta,
+                                    codigoTipoOferta,
+                                    codigoOfertaOrigem,
+                                    turno,
+                                    codigoIdentificacaoAVA,
+                                    data_criacao,
+                                    data_atualizacao
+                                )
+                                VALUES
+                                (
+                                    ?,
+                                    ?,
+                                    ?,
+                                    ?,
+                                    ?,
+                                    ?,
+                                    ?,
+                                    ?,
+                                    GETDATE(),
+                                    GETDATE()
+                                )
+                                """,
+                                (
+                                    reg[
+                                        "codigoOferta"
+                                    ],
+
+                                    reg[
+                                        "nomeOferta"
+                                    ],
+
+                                    reg[
+                                        "codigoDisciplina"
+                                    ],
+
+                                    reg[
+                                        "semestreOferta"
+                                    ],
+
+                                    reg[
+                                        "codigoTipoOferta"
+                                    ],
+
+                                    reg[
+                                        "codigoOfertaOrigem"
+                                    ] or "",
+
+                                    reg[
+                                        "turno"
+                                    ] or "",
+
+                                    reg[
+                                        "codigoIdentificacaoAVA"
+                                    ] or "",
+                                )
+                            )
+
+                            inseridos += 1
+
+                        except Exception as e:
+
+                            logger.exception(
+                                "Erro inserindo oferta "
+                                "%s | registro %d/%d",
+                                reg[
+                                    "codigoOferta"
+                                ],
+                                indice,
+                                total_processados
+                            )
+
+                            print(
+                                f"✗ Erro na oferta "
+                                f"{reg['codigoOferta']}: {e}"
+                            )
+
+                            # =================================================
+                            # IMPORTANTE:
+                            # Qualquer erro cancela toda a reconstrução.
+                            # =================================================
+
+                            raise
+
+                    # =========================================================
+                    # COMMIT SOMENTE SE TODOS OS INSERTS FUNCIONARAM
+                    # =========================================================
+
+                    conn.commit()
+
+                    logger.info(
+                        "COMMIT realizado com sucesso."
+                    )
+
+                    logger.info(
+                        "Reconstrução concluída: %d ofertas.",
+                        inseridos
+                    )
+
+                except Exception:
+
+                    # =========================================================
+                    # ROLLBACK
+                    # =========================================================
 
                     try:
 
-                        cursor.execute(
-                            """
-                            INSERT INTO imp_005_ofertas
-                            (
-                                codigoOferta,
-                                nomeOferta,
-                                codigoDisciplina,
-                                semestreOferta,
-                                codigoTipoOferta,
-                                codigoOfertaOrigem,
-                                turno,
-                                codigoIdentificacaoAVA,
-                                data_criacao,
-                                data_atualizacao
-                            )
-                            VALUES
-                            (
-                                ?,
-                                ?,
-                                ?,
-                                ?,
-                                ?,
-                                ?,
-                                ?,
-                                ?,
-                                GETDATE(),
-                                GETDATE()
-                            )
-                            """,
-                            (
-                                reg["codigoOferta"],
-                                reg["nomeOferta"],
-                                reg["codigoDisciplina"],
-                                reg["semestreOferta"],
-                                reg["codigoTipoOferta"],
-                                reg["codigoOfertaOrigem"] or "",
-                                reg["turno"] or "",
-                                reg["codigoIdentificacaoAVA"] or "",
-                            )
+                        conn.rollback()
+
+                        logger.error(
+                            "ROLLBACK executado. "
+                            "A reconstrução da imp_005_ofertas "
+                            "foi cancelada integralmente."
                         )
-
-                        inseridos += 1
-
-                    except Exception as e:
-
-                        erros += 1
 
                         print(
-                            f"✗ {reg['codigoOferta']}: {e}"
+                            "↩️ ROLLBACK executado. "
+                            "Os dados anteriores foram preservados."
                         )
+
+                    except Exception as rollback_error:
 
                         logger.exception(
-                            "Erro inserindo oferta %s",
-                            reg["codigoOferta"]
+                            "Falha ao executar ROLLBACK: %s",
+                            rollback_error
                         )
 
-                conn.commit()
+                    raise
 
         except Exception as e:
 
@@ -996,27 +1399,23 @@ class ImportadorOfertas:
             )
 
             print(
-                f"❌ Erro durante reconstrução: {e}"
+                f"❌ Falha na reconstrução: {e}"
             )
 
             return {
                 "total_inseridos": 0,
                 "total_atualizados": 0,
-                "total_erros": len(
-                    dados_transformados
-                ),
-                "total_processados": len(
-                    dados_transformados
-                ),
+                "total_erros": 1,
+                "total_processados": total_processados,
+                "rollback": True,
             }
 
         return {
             "total_inseridos": inseridos,
             "total_atualizados": 0,
-            "total_erros": erros,
-            "total_processados": len(
-                dados_transformados
-            ),
+            "total_erros": 0,
+            "total_processados": total_processados,
+            "rollback": False,
         }
 
     # =========================================================================
@@ -1025,11 +1424,17 @@ class ImportadorOfertas:
 
     def executar_importacao(self):
 
-        print("=" * 70)
+        print(
+            "=" * 70
+        )
+
         print(
             "IMPORTAÇÃO: imp_005_ofertas"
         )
-        print("=" * 70)
+
+        print(
+            "=" * 70
+        )
 
         print(
             f"📅 Ano: {ANO_VIGENTE}"
@@ -1048,28 +1453,72 @@ class ImportadorOfertas:
         )
 
         print(
+            "📅 semestreOferta: ano.semestre da turma"
+        )
+
+        print(
             f"📄 Log: {LOG_FILE}"
         )
 
-        dados = (
-            self.obter_dados_lyceum()
-        )
+        # =====================================================================
+        # 1. CONSULTA
+        # =====================================================================
+
+        try:
+
+            dados = (
+                self.obter_dados_lyceum()
+            )
+
+        except Exception as e:
+
+            logger.exception(
+                "Falha na consulta ao Lyceum."
+            )
+
+            print(
+                f"❌ Erro consultando Lyceum: {e}"
+            )
+
+            return []
 
         print(
             f"📊 Turmas encontradas: "
             f"{len(dados)}"
         )
 
-        transformados = (
-            self.transformar_dados(
-                dados
+        # =====================================================================
+        # 2. TRANSFORMAÇÃO
+        # =====================================================================
+
+        try:
+
+            transformados = (
+                self.transformar_dados(
+                    dados
+                )
             )
-        )
+
+        except Exception as e:
+
+            logger.exception(
+                "Falha durante transformação dos dados."
+            )
+
+            print(
+                f"❌ Erro durante transformação: {e}"
+            )
+
+            return []
 
         print(
             f"✅ Ofertas únicas: "
             f"{len(transformados)}"
         )
+
+        # =====================================================================
+        # 3. IMPORTAÇÃO
+        # =====================================================================
 
         resultado = (
             self.importar_para_qstione(
@@ -1077,18 +1526,58 @@ class ImportadorOfertas:
             )
         )
 
-        print(
-            f"📈 Inseridos: "
-            f"{resultado['total_inseridos']} "
-            f"| Erros: "
-            f"{resultado['total_erros']}"
-        )
+        # =====================================================================
+        # 4. RESULTADO
+        # =====================================================================
+
+        if resultado.get(
+            "rollback",
+            False
+        ):
+
+            print(
+                "\n❌ IMPORTAÇÃO CANCELADA"
+            )
+
+            print(
+                "↩️ Nenhuma alteração parcial foi mantida."
+            )
+
+        else:
+
+            print(
+                f"\n📈 Inseridos: "
+                f"{resultado['total_inseridos']}"
+            )
+
+            print(
+                f"✗ Erros: "
+                f"{resultado['total_erros']}"
+            )
+
+            print(
+                "✅ Reconstrução concluída com sucesso."
+            )
 
         logger.info(
             "RESULTADO FINAL | "
-            "Inseridos=%d | Erros=%d",
-            resultado["total_inseridos"],
-            resultado["total_erros"]
+            "Processados=%d | "
+            "Inseridos=%d | "
+            "Erros=%d | "
+            "Rollback=%s",
+            resultado[
+                "total_processados"
+            ],
+            resultado[
+                "total_inseridos"
+            ],
+            resultado[
+                "total_erros"
+            ],
+            resultado.get(
+                "rollback",
+                False
+            )
         )
 
         logger.info(

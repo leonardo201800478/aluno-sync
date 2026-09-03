@@ -1,189 +1,64 @@
+
 """
 qstione/importadores/imp_008_usuarios_disciplinas.py
 
 Importador independente para imp_008_usuarios_disciplinas.
 
-REGRAS DE NEGÓCIO
------------------
+REGRAS
+------
 
-1. DOCENTES NORMAIS
-
-   A origem da disciplina/oferta é a TURMA REAL:
+1. A origem dos vínculos é a turma:
 
        LY_TURMA_DOCENTE
               ↓
        LY_TURMA
               ↓
-       LY_DOCENTE
+       LY_TURMA.curso
+
+2. A faculdade da turma é determinada por:
+
+       LY_TURMA.curso
               ↓
-       disciplina + curso + e-mail
+       LY_CURSO.faculdade
 
+3. LY_DISCIPLINA.faculdade NÃO é utilizada para determinar
+   a faculdade da turma.
 
-2. CURSO
+4. São considerados:
+       - ANO_VIGENTE;
+       - TODOS os PERIODOS_VIGENTES;
+       - SITUACAO_TURMA_VALIDA;
+       - FACULDADES_INCLUIDAS.
 
-   O curso utiliza exatamente o MAPEAMENTO_CURSOS do
-   imp_002_disciplina.py.
+5. Curso NULL, vazio ou 999 representa COMPARTILHADA.
 
-   Exemplo:
+6. Curso real nunca é convertido automaticamente para 999.
 
-       056 -> 056
-       141 -> 056
+7. O código do curso usa MAPEAMENTO_CURSOS do imp_002.
 
-       065 -> 065
-       036 -> 065
-       037 -> 065
+8. O código da disciplina é gerado por:
 
-
-3. TURMAS COMPARTILHADAS
-
-   Uma turma somente será considerada compartilhada quando
-   o campo LY_TURMA.curso original for:
-
-       NULL
-       vazio
-       999
-
-   Nesses casos:
-
-       curso = 999
-       nome_curso = COMPARTILHADA
-
-   IMPORTANTE:
-
-   Uma disciplina que possua um curso real NÃO será transformada
-   em curso 999 somente porque seu código possui '-COM'.
-
-
-4. DISCIPLINAS COMPARTILHADAS
-
-   Uma disciplina compartilhada também pode ser identificada
-   através de LY_MATRICULA.
-
-   Para o ano/período configurado em:
-
-       ANO_VIGENTE
-       PERIODOS_VIGENTES
-
-   são identificadas as combinações:
-
-       turma + disciplina
-
-   que possuem mais de uma ocorrência.
-
-   Para essas disciplinas é criada a identificação:
-
-       disciplina + '-COM'
-
-   Exemplo:
-
-       MAT001
-       ↓
-       MAT001-COM
-
-
-5. CURSOS DE UMA DISCIPLINA COMPARTILHADA
-
-   Depois de identificar somente as disciplinas compartilhadas,
-   consulta-se LY_MATRICULA + LY_ALUNO para descobrir em quais
-   cursos os alunos daquela disciplina estão matriculados.
-
-   O MAPEAMENTO_CURSOS é aplicado nesse momento.
-
-   Exemplo:
-
-       disciplina: MAT001-COM
-
-       cursos encontrados:
-           056
-           141
-
-       MAPEAMENTO_CURSOS:
-           056 -> 056
-           141 -> 056
-
-       resultado:
-
-           MAT001-COM -> curso 056
-
-
-6. NDE
-
-   Os usuários são obtidos de:
-
-       imp_nde_cursos
-       imp_nde_membros
-
-   O curso informado nas tabelas do NDE também passa pelo
-   MAPEAMENTO_CURSOS.
-
-
-7. NDE + DISCIPLINA COMPARTILHADA
-
-   O usuário NDE somente recebe acesso à disciplina compartilhada
-   quando o curso unificado do usuário estiver entre os cursos
-   identificados para aquela disciplina.
-
-   Exemplo:
-
-       MAT001-COM -> curso 056
-
-       NDE:
-           professor1 -> 056
-           professor2 -> 031
-
-       Resultado:
-
-           professor1 -> MAT001 compartilhada
-
-       professor2 NÃO recebe acesso.
-
-
-8. CURSO 999
-
-   O curso 999 representa exclusivamente:
-
-       - turmas cujo curso é NULL;
-       - turmas cujo curso é vazio;
-       - turmas cujo curso é 999;
-       - disciplinas compartilhadas geradas pela regra de
-         compartilhamento via LY_MATRICULA.
-
-   Não é permitido converter uma turma com curso real
-   diretamente para 999.
-
-
-9. GERAÇÃO DO CÓDIGO DA DISCIPLINA
-
-   O '-COM' é utilizado apenas para identificar a disciplina
-   compartilhada durante o processamento.
-
-   Antes de chamar:
-
-       gerar_codigo_disciplina_curso()
-
-   o '-COM' é removido.
-
-   Exemplo:
-
-       MAT001-COM
-           ↓
-       MAT001
-           ↓
        gerar_codigo_disciplina_curso(
-           'MAT001',
-           'COMPARTILHADA',
-           '999'
+           disciplina,
+           nome_curso_unificado,
+           curso_unificado
        )
 
+9. Para disciplina compartilhada com sufixo -COM:
 
-10. EXECUÇÃO
+       DISC001-COM
+              ↓
+       DISC001
+              ↓
+       curso = 999
+              ↓
+       COMPARTILHADA
 
-    A tabela destino é reconstruída a cada execução:
+10. Usuários NDE recebem acesso às disciplinas compartilhadas
+    somente quando o curso do NDE estiver relacionado à disciplina
+    compartilhada.
 
-        DELETE FROM imp_008_usuarios_disciplinas
-
-    O arquivo pode ser executado diretamente pelo botão Play
-    do VS Code.
+11. A tabela é reconstruída integralmente.
 """
 
 import os
@@ -191,9 +66,9 @@ import sys
 import logging
 
 
-# =============================================================================
+# ============================================================================
 # PATH
-# =============================================================================
+# ============================================================================
 
 ROOT = os.path.dirname(
     os.path.dirname(
@@ -207,9 +82,9 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
-# =============================================================================
+# ============================================================================
 # IMPORTS
-# =============================================================================
+# ============================================================================
 
 from core.database import get_db_connection
 
@@ -219,7 +94,9 @@ from qstione.core.transformacoes import (
     gerar_codigo_disciplina_curso,
 )
 
-from qstione.core.validacoes import validar_email
+from qstione.core.validacoes import (
+    validar_email,
+)
 
 from qstione.config.filtros import (
     ANO_VIGENTE,
@@ -233,9 +110,9 @@ from qstione.importadores.imp_002_disciplina import (
 )
 
 
-# =============================================================================
+# ============================================================================
 # LOG
-# =============================================================================
+# ============================================================================
 
 LOG_DIR = os.path.join(
     ROOT,
@@ -263,44 +140,31 @@ logger = logging.getLogger(
 )
 
 
-# =============================================================================
+# ============================================================================
 # CONSTANTES
-# =============================================================================
+# ============================================================================
 
 CURSO_COMPARTILHADO = "999"
 
 SUFIXO_COMPARTILHADA = "-COM"
 
 
-# =============================================================================
+# ============================================================================
 # IMPORTADOR
-# =============================================================================
+# ============================================================================
 
 class ImportadorUsuariosDisciplinas:
-    """
-    Importa os usuários que possuem acesso às disciplinas.
-
-    Existem dois fluxos principais:
-
-    1. Docentes das turmas reais.
-    2. Usuários NDE, incluindo o acesso controlado às disciplinas
-       compartilhadas.
-
-    O curso 999 não representa acesso global.
-    """
 
     def __init__(self):
-        """
-        Inicializa o importador e prepara os placeholders utilizados
-        nas consultas SQL.
-        """
 
         self.periodos_placeholders = ",".join(
-            "?" for _ in PERIODOS_VIGENTES
+            "?"
+            for _ in PERIODOS_VIGENTES
         )
 
         self.faculdades_placeholders = ",".join(
-            "?" for _ in FACULDADES_INCLUIDAS
+            "?"
+            for _ in FACULDADES_INCLUIDAS
         )
 
         logger.info("=" * 80)
@@ -329,19 +193,57 @@ class ImportadorUsuariosDisciplinas:
             SITUACAO_TURMA_VALIDA
         )
 
-        logger.info(
-            "LOG_FILE=%s",
-            LOG_FILE
+    # ========================================================================
+    # CURSO
+    # ========================================================================
+
+    @staticmethod
+    def _normalizar_curso(curso):
+
+        if curso is None:
+
+            return (
+                CURSO_COMPARTILHADO,
+                "COMPARTILHADA",
+            )
+
+        curso = str(curso).strip()
+
+        if not curso:
+
+            return (
+                CURSO_COMPARTILHADO,
+                "COMPARTILHADA",
+            )
+
+        if curso == CURSO_COMPARTILHADO:
+
+            return (
+                CURSO_COMPARTILHADO,
+                "COMPARTILHADA",
+            )
+
+        if curso in MAPEAMENTO_CURSOS:
+
+            codigo, nome = (
+                MAPEAMENTO_CURSOS[curso]
+            )
+
+            return (
+                str(codigo).strip(),
+                str(nome).strip(),
+            )
+
+        return (
+            curso,
+            curso,
         )
 
-    # =========================================================================
+    # ========================================================================
     # TABELA
-    # =========================================================================
+    # ========================================================================
 
-    def _tabela_existe(self) -> bool:
-        """
-        Verifica se a tabela destino existe.
-        """
+    def _tabela_existe(self):
 
         try:
 
@@ -349,7 +251,7 @@ class ImportadorUsuariosDisciplinas:
                 database_name="qstione"
             ) as conn:
 
-                resultado = conn.execute(
+                return conn.execute(
                     """
                     SELECT 1
                     FROM INFORMATION_SCHEMA.TABLES
@@ -359,29 +261,21 @@ class ImportadorUsuariosDisciplinas:
                     (
                         "imp_008_usuarios_disciplinas",
                     )
-                ).fetchone()
-
-                return resultado is not None
+                ).fetchone() is not None
 
         except Exception:
 
             logger.exception(
-                "Erro ao verificar existência da tabela."
+                "Erro ao verificar tabela."
             )
 
             return False
 
-    # =========================================================================
-    # ÍNDICE
-    # =========================================================================
+    # ========================================================================
+    # ÍNDICES
+    # ========================================================================
 
-    def _indice_existe(
-        self,
-        nome_indice: str
-    ) -> bool:
-        """
-        Verifica se um índice existe.
-        """
+    def _indice_existe(self, nome):
 
         try:
 
@@ -389,80 +283,20 @@ class ImportadorUsuariosDisciplinas:
                 database_name="qstione"
             ) as conn:
 
-                resultado = conn.execute(
+                return conn.execute(
                     """
                     SELECT 1
                     FROM sys.indexes
                     WHERE name = ?
                     """,
-                    (
-                        nome_indice,
-                    )
-                ).fetchone()
-
-                return resultado is not None
+                    (nome,)
+                ).fetchone() is not None
 
         except Exception:
 
-            logger.exception(
-                "Erro ao verificar índice %s.",
-                nome_indice
-            )
-
             return False
 
-    # =========================================================================
-    # CRIAÇÃO DA TABELA
-    # =========================================================================
-
-    def _criar_tabela(self):
-        """
-        Cria a tabela destino caso ela ainda não exista.
-        """
-
-        if not self._tabela_existe():
-
-            logger.info(
-                "Criando tabela imp_008_usuarios_disciplinas..."
-            )
-
-            with get_db_connection(
-                database_name="qstione"
-            ) as conn:
-
-                conn.execute(
-                    """
-                    CREATE TABLE imp_008_usuarios_disciplinas (
-                        codigoDisciplina NVARCHAR(30) NOT NULL,
-                        emailUsuario NVARCHAR(100) NOT NULL,
-                        status CHAR(1) NOT NULL DEFAULT 'S',
-                        data_criacao DATETIME2 DEFAULT GETDATE(),
-                        data_atualizacao DATETIME2 DEFAULT GETDATE(),
-
-                        PRIMARY KEY (
-                            codigoDisciplina,
-                            emailUsuario
-                        )
-                    )
-                    """
-                )
-
-                conn.commit()
-
-            logger.info(
-                "🆕 Tabela criada com sucesso."
-            )
-
-        self._criar_indices()
-
-    # =========================================================================
-    # ÍNDICES
-    # =========================================================================
-
     def _criar_indices(self):
-        """
-        Cria os índices auxiliares caso ainda não existam.
-        """
 
         indices = [
 
@@ -470,26 +304,28 @@ class ImportadorUsuariosDisciplinas:
                 "idx_usuarios_disciplinas_email",
 
                 """
-                CREATE INDEX idx_usuarios_disciplinas_email
-                ON imp_008_usuarios_disciplinas(emailUsuario)
+                CREATE INDEX
+                    idx_usuarios_disciplinas_email
+                ON imp_008_usuarios_disciplinas
+                    (emailUsuario)
                 """
             ),
 
             (
-                "idx_usuarios_disciplinas_codigo",
+                "idx_usuarios_disciplinas_disciplina",
 
                 """
-                CREATE INDEX idx_usuarios_disciplinas_codigo
-                ON imp_008_usuarios_disciplinas(codigoDisciplina)
+                CREATE INDEX
+                    idx_usuarios_disciplinas_disciplina
+                ON imp_008_usuarios_disciplinas
+                    (codigoDisciplina)
                 """
             ),
         ]
 
-        for nome_indice, sql in indices:
+        for nome, sql in indices:
 
-            if self._indice_existe(
-                nome_indice
-            ):
+            if self._indice_existe(nome):
                 continue
 
             try:
@@ -501,575 +337,78 @@ class ImportadorUsuariosDisciplinas:
                     conn.execute(sql)
                     conn.commit()
 
-                logger.info(
-                    "Índice criado: %s",
-                    nome_indice
+            except Exception as exc:
+
+                logger.warning(
+                    "Não foi possível criar índice %s: %s",
+                    nome,
+                    exc
                 )
 
-            except Exception:
+    # ========================================================================
+    # CRIAÇÃO
+    # ========================================================================
 
-                logger.exception(
-                    "Erro ao criar índice %s.",
-                    nome_indice
-                )
+    def _criar_tabela(self):
 
-    # =========================================================================
-    # NORMALIZAÇÃO DO CURSO
-    # =========================================================================
-
-    @staticmethod
-    def _normalizar_curso(curso):
-        """
-        Normaliza o código original do curso.
-
-        SOMENTE estes valores representam curso compartilhado:
-
-            NULL
-            vazio
-            999
-
-        Cursos reais passam pelo MAPEAMENTO_CURSOS.
-
-        Returns
-        -------
-        tuple[str, str]
-            Código unificado e nome do curso.
-        """
-
-        # ---------------------------------------------------------------------
-        # NULL
-        # ---------------------------------------------------------------------
-
-        if curso is None:
-
-            return (
-                CURSO_COMPARTILHADO,
-                "COMPARTILHADA"
-            )
-
-        # ---------------------------------------------------------------------
-        # STRING NORMALIZADA
-        # ---------------------------------------------------------------------
-
-        curso = str(
-            curso
-        ).strip()
-
-        # ---------------------------------------------------------------------
-        # VAZIO
-        # ---------------------------------------------------------------------
-
-        if not curso:
-
-            return (
-                CURSO_COMPARTILHADO,
-                "COMPARTILHADA"
-            )
-
-        # ---------------------------------------------------------------------
-        # 999
-        # ---------------------------------------------------------------------
-
-        if curso == CURSO_COMPARTILHADO:
-
-            return (
-                CURSO_COMPARTILHADO,
-                "COMPARTILHADA"
-            )
-
-        # ---------------------------------------------------------------------
-        # MAPEAMENTO DE CURSOS REAIS
-        # ---------------------------------------------------------------------
-
-        if curso in MAPEAMENTO_CURSOS:
-
-            curso_unificado, nome_curso = (
-                MAPEAMENTO_CURSOS[
-                    curso
-                ]
-            )
-
-            return (
-                str(
-                    curso_unificado
-                ).strip(),
-
-                str(
-                    nome_curso
-                ).strip()
-            )
-
-        # ---------------------------------------------------------------------
-        # CURSO NÃO MAPEADO
-        # ---------------------------------------------------------------------
-
-        return (
-            curso,
-            curso
-        )
-
-    # =========================================================================
-    # DISCIPLINAS COMPARTILHADAS
-    # =========================================================================
-
-    def _obter_disciplinas_compartilhadas(self):
-        """
-        Identifica exclusivamente disciplinas compartilhadas.
-
-        Uma disciplina somente poderá receber o sufixo '-COM' quando
-        a TURMA correspondente possuir curso:
-
-            NULL
-            vazio
-            999
-
-        A existência de múltiplos alunos em LY_MATRICULA, sozinha,
-        NÃO é suficiente para transformar uma disciplina em compartilhada.
-
-        A relação utilizada é:
-
-            LY_MATRICULA
-                ↓
-            LY_TURMA
-                ↓
-            LY_ALUNO
-
-        A combinação turma + disciplina somente será considerada
-        compartilhada quando a LY_TURMA correspondente não possuir
-        um curso real.
-
-        Retorna:
-            {
-                'DISCIPLINA-COM': {'curso1', 'curso2', ...}
-            }
-        """
-
-        logger.info(
-            "🔎 Identificando disciplinas compartilhadas..."
-        )
-
-        query = f"""
-            WITH duplicadas AS (
-
-                SELECT
-                    m.turma,
-                    m.disciplina
-
-                FROM LY_MATRICULA m
-
-                INNER JOIN LY_TURMA t
-                    ON t.ano = m.ano
-                AND t.semestre = m.semestre
-                AND t.turma = m.turma
-                AND t.disciplina = m.disciplina
-
-                WHERE m.ano = ?
-
-                AND m.semestre IN (
-                    {self.periodos_placeholders}
-                )
-
-                AND m.disciplina IS NOT NULL
-
-                AND LTRIM(RTRIM(
-                    CAST(m.disciplina AS NVARCHAR(100))
-                )) <> ''
-
-                -- =========================================================
-                -- SOMENTE TURMAS SEM CURSO REAL
-                -- =========================================================
-
-                AND (
-                        t.curso IS NULL
-
-                        OR LTRIM(RTRIM(
-                            CAST(t.curso AS NVARCHAR(30))
-                        )) = ''
-
-                        OR LTRIM(RTRIM(
-                            CAST(t.curso AS NVARCHAR(30))
-                        )) = '999'
-                )
-
-                GROUP BY
-                    m.turma,
-                    m.disciplina
-
-                HAVING COUNT(*) > 1
-            )
-
-            SELECT DISTINCT
-
-                m.disciplina + '-COM' AS disciplina_com,
-
-                a.curso
-
-            FROM LY_MATRICULA m
-
-            INNER JOIN LY_TURMA t
-                ON t.ano = m.ano
-            AND t.semestre = m.semestre
-            AND t.turma = m.turma
-            AND t.disciplina = m.disciplina
-
-            INNER JOIN LY_ALUNO a
-                ON m.aluno = a.aluno
-
-            WHERE m.ano = ?
-
-            AND m.semestre IN (
-                {self.periodos_placeholders}
-            )
-
-            -- =============================================================
-            -- GARANTE NOVAMENTE QUE A TURMA NÃO POSSUI CURSO REAL
-            -- =============================================================
-
-            AND (
-                    t.curso IS NULL
-
-                    OR LTRIM(RTRIM(
-                        CAST(t.curso AS NVARCHAR(30))
-                    )) = ''
-
-                    OR LTRIM(RTRIM(
-                        CAST(t.curso AS NVARCHAR(30))
-                    )) = '999'
-            )
-
-            AND EXISTS (
-
-                SELECT 1
-
-                FROM duplicadas d
-
-                WHERE d.turma = m.turma
-                    AND d.disciplina = m.disciplina
-            )
-
-            AND m.disciplina IS NOT NULL
-
-            AND LTRIM(RTRIM(
-                CAST(m.disciplina AS NVARCHAR(100))
-            )) <> ''
-
-            AND a.curso IS NOT NULL
-
-            AND LTRIM(RTRIM(
-                CAST(a.curso AS NVARCHAR(30))
-            )) <> ''
-
-            ORDER BY
-                disciplina_com
-        """
-
-        params = (
-            ANO_VIGENTE,
-            *PERIODOS_VIGENTES,
-
-            ANO_VIGENTE,
-            *PERIODOS_VIGENTES,
-        )
-
-        try:
-
-            with get_db_connection() as conn:
-
-                rows = conn.execute(
-                    query,
-                    params
-                ).fetchall()
-
-        except Exception:
-
-            logger.exception(
-                "❌ Erro ao consultar disciplinas compartilhadas."
-            )
-
-            return {}
-
-        disciplinas_por_curso = {}
-
-        for disciplina_com, curso_original in rows:
-
-            if not disciplina_com:
-                continue
-
-            if curso_original is None:
-                continue
-
-            disciplina_com = str(
-                disciplina_com
-            ).strip()
-
-            curso_original = str(
-                curso_original
-            ).strip()
-
-            if not curso_original:
-                continue
-
-            # =============================================================
-            # NORMALIZA CURSO DO ALUNO
-            # =============================================================
-
-            curso_unificado, _ = (
-                self._normalizar_curso(
-                    curso_original
-                )
-            )
-
-            # =============================================================
-            # 999 NÃO É CURSO ACADÊMICO DE ORIGEM
-            #
-            # O 999 aqui é o destino da disciplina compartilhada.
-            # Os cursos que determinam quem recebe acesso são os cursos
-            # reais dos alunos.
-            # =============================================================
-
-            if curso_unificado == CURSO_COMPARTILHADO:
-                continue
-
-            disciplinas_por_curso.setdefault(
-                disciplina_com,
-                set()
-            ).add(
-                curso_unificado
-            )
-
-        logger.info(
-            "📚 Disciplinas compartilhadas encontradas: %d",
-            len(disciplinas_por_curso)
-        )
-
-        total_relacoes = sum(
-            len(cursos)
-            for cursos in disciplinas_por_curso.values()
-        )
-
-        logger.info(
-            "🔗 Relações disciplina compartilhada/curso: %d",
-            total_relacoes
-        )
-
-        for disciplina_com, cursos in sorted(
-            disciplinas_por_curso.items()
-        ):
-
-            logger.info(
-                "   %s -> cursos %s",
-                disciplina_com,
-                sorted(cursos)
-            )
-
-        return disciplinas_por_curso
-
-    # =========================================================================
-    # NDE POR CURSO
-    # =========================================================================
-
-    def _obter_emails_nde_por_curso(self):
-        """
-        Obtém usuários NDE agrupados pelo curso unificado.
-        """
-
-        nde_por_curso = {}
-
-        try:
+        if not self._tabela_existe():
 
             with get_db_connection(
                 database_name="qstione"
             ) as conn:
 
-                # =============================================================
-                # COORDENADORES NDE
-                # =============================================================
-
-                rows = conn.execute(
+                conn.execute(
                     """
-                    SELECT
-                        codigoCurso,
-                        emailCoordenador
+                    CREATE TABLE
+                        imp_008_usuarios_disciplinas (
 
-                    FROM imp_nde_cursos
+                        codigoDisciplina
+                            NVARCHAR(30) NOT NULL,
 
-                    WHERE codigoCurso IS NOT NULL
-                      AND emailCoordenador IS NOT NULL
-                      AND LTRIM(RTRIM(emailCoordenador)) <> ''
-                      AND status = 'S'
-                    """
-                ).fetchall()
+                        emailUsuario
+                            NVARCHAR(100) NOT NULL,
 
-                for curso, email in rows:
+                        status
+                            CHAR(1) NOT NULL
+                            DEFAULT 'S',
 
-                    curso_unificado, _ = (
-                        self._normalizar_curso(
-                            curso
+                        data_criacao
+                            DATETIME2
+                            DEFAULT GETDATE(),
+
+                        data_atualizacao
+                            DATETIME2
+                            DEFAULT GETDATE(),
+
+                        PRIMARY KEY (
+                            codigoDisciplina,
+                            emailUsuario
                         )
                     )
-
-                    email = converter_minusculas(
-                        str(
-                            email
-                        ).strip()
-                    )
-
-                    if not validar_email(
-                        email
-                    ):
-                        continue
-
-                    nde_por_curso.setdefault(
-                        curso_unificado,
-                        set()
-                    ).add(
-                        email
-                    )
-
-                # =============================================================
-                # MEMBROS NDE
-                # =============================================================
-
-                rows = conn.execute(
                     """
-                    SELECT
-                        codigoCurso,
-                        emailMembro
-
-                    FROM imp_nde_membros
-
-                    WHERE codigoCurso IS NOT NULL
-                      AND emailMembro IS NOT NULL
-                      AND LTRIM(RTRIM(emailMembro)) <> ''
-                      AND status = 'S'
-                    """
-                ).fetchall()
-
-                for curso, email in rows:
-
-                    curso_unificado, _ = (
-                        self._normalizar_curso(
-                            curso
-                        )
-                    )
-
-                    email = converter_minusculas(
-                        str(
-                            email
-                        ).strip()
-                    )
-
-                    if not validar_email(
-                        email
-                    ):
-                        continue
-
-                    nde_por_curso.setdefault(
-                        curso_unificado,
-                        set()
-                    ).add(
-                        email
-                    )
-
-        except Exception:
-
-            logger.exception(
-                "Erro ao consultar usuários NDE."
-            )
-
-            return {}
-
-        total_usuarios = sum(
-            len(usuarios)
-            for usuarios in nde_por_curso.values()
-        )
-
-        logger.info(
-            "👥 Cursos com usuários NDE: %d",
-            len(nde_por_curso)
-        )
-
-        logger.info(
-            "👥 Relações NDE/curso: %d",
-            total_usuarios
-        )
-
-        return nde_por_curso
-
-    # =========================================================================
-    # NDE -> DISCIPLINAS COMPARTILHADAS
-    # =========================================================================
-
-    def _gerar_acessos_nde_compartilhados(
-        self,
-        disciplinas_compartilhadas,
-        nde_por_curso
-    ):
-        """
-        Relaciona usuários NDE às disciplinas compartilhadas.
-
-        O vínculo somente ocorre quando o curso do NDE estiver
-        associado à disciplina compartilhada.
-        """
-
-        resultados = set()
-
-        for disciplina_com, cursos_origem in (
-            disciplinas_compartilhadas.items()
-        ):
-
-            for curso in cursos_origem:
-
-                usuarios = nde_por_curso.get(
-                    curso,
-                    set()
                 )
 
-                if not usuarios:
-                    continue
+                conn.commit()
 
                 logger.info(
-                    "🔗 %s -> curso %s -> %d usuários NDE",
-                    disciplina_com,
-                    curso,
-                    len(usuarios)
+                    "🆕 Tabela criada."
                 )
 
-                for email in usuarios:
+        self._criar_indices()
 
-                    resultados.add(
-                        (
-                            disciplina_com,
-                            CURSO_COMPARTILHADO,
-                            email
-                        )
-                    )
-
-        logger.info(
-            "🌐 Vínculos NDE/disciplina compartilhada: %d",
-            len(resultados)
-        )
-
-        return resultados
-
-    # =========================================================================
-    # DOCENTES DAS TURMAS
-    # =========================================================================
+    # ========================================================================
+    # DOCENTES
+    # ========================================================================
 
     def _obter_docentes_turmas(self):
         """
-        Obtém os docentes vinculados às turmas do período vigente.
+        Obtém docentes das turmas válidas.
 
-        IMPORTANTE:
+        Faculdade:
 
-        O curso original da LY_TURMA é preservado.
-
-        Assim conseguimos distinguir:
-
-            NULL -> compartilhada
-            vazio -> compartilhada
-            999 -> compartilhada
-            curso real -> curso real
+            LY_TURMA.curso
+                 ↓
+            LY_CURSO.faculdade
         """
 
         query = f"""
@@ -1107,41 +446,46 @@ class ImportadorUsuariosDisciplinas:
                     t.curso IS NULL
 
                     OR LTRIM(RTRIM(
-                        CAST(t.curso AS NVARCHAR(30))
+                        CAST(t.curso AS NVARCHAR(100))
                     )) = ''
 
                     OR LTRIM(RTRIM(
-                        CAST(t.curso AS NVARCHAR(30))
+                        CAST(t.curso AS NVARCHAR(100))
                     )) = '999'
 
                     OR c.faculdade IN (
                         {self.faculdades_placeholders}
                     )
-                  )
+              )
+
+              AND (d.ativo = 'S' OR d.ativo IS NULL)
 
               AND d.mailbox IS NOT NULL
 
               AND LTRIM(RTRIM(d.mailbox)) <> ''
+
+            ORDER BY
+                td.disciplina,
+                t.curso,
+                d.mailbox
         """
 
-        params = (
+        params = [
             ANO_VIGENTE,
             *PERIODOS_VIGENTES,
             SITUACAO_TURMA_VALIDA,
             *FACULDADES_INCLUIDAS,
-        )
-
-        logger.info(
-            "👨‍🏫 Consultando docentes das turmas..."
-        )
+        ]
 
         try:
 
-            with get_db_connection() as conn:
+            with get_db_connection(
+                database_name="lyceum"
+            ) as conn:
 
-                rows = conn.execute(
+                return conn.execute(
                     query,
-                    params
+                    tuple(params)
                 ).fetchall()
 
         except Exception:
@@ -1152,347 +496,282 @@ class ImportadorUsuariosDisciplinas:
 
             return []
 
-        logger.info(
-            "👨‍🏫 Vínculos docente/disciplina encontrados: %d",
-            len(rows)
-        )
+    # ========================================================================
+    # DISCIPLINAS COMPARTILHADAS
+    # ========================================================================
 
-        return rows
+    def _obter_disciplinas_compartilhadas(self):
 
-    # =========================================================================
-    # CONSULTA PRINCIPAL
-    # =========================================================================
-
-    def obter_dados_lyceum(self):
         """
-        Monta todos os vínculos de usuários com disciplinas.
+        Retorna:
+
+            {
+                disciplina_com: {
+                    cursos_reais
+                }
+            }
+
+        Uma disciplina compartilhada pode ser utilizada por
+        mais de um curso.
         """
 
-        resultados = set()
+        query = f"""
+            SELECT DISTINCT
 
-        # =====================================================================
-        # 1. DOCENTES DAS TURMAS
-        # =====================================================================
+                t.disciplina,
 
-        dados_docentes = (
-            self._obter_docentes_turmas()
-        )
+                t.curso
 
-        for disciplina, curso, email in (
-            dados_docentes
-        ):
+            FROM LY_TURMA t
 
-            if not disciplina:
-                continue
+            LEFT JOIN LY_CURSO c
+                ON c.curso = t.curso
 
-            if not email:
-                continue
+            WHERE t.ano = ?
 
-            email = converter_minusculas(
-                str(
-                    email
-                ).strip()
-            )
+              AND t.semestre IN (
+                  {self.periodos_placeholders}
+              )
 
-            if not validar_email(email):
+              AND t.sit_turma = ?
 
-                logger.warning(
-                    "E-mail inválido para disciplina %s: %s",
-                    disciplina,
-                    email
-                )
+              AND (
+                    t.curso IS NULL
 
-                continue
+                    OR LTRIM(RTRIM(
+                        CAST(t.curso AS NVARCHAR(100))
+                    )) = ''
 
-            resultados.add(
-                (
-                    str(
-                        disciplina
-                    ).strip(),
+                    OR LTRIM(RTRIM(
+                        CAST(t.curso AS NVARCHAR(100))
+                    )) = '999'
 
-                    curso,
-
-                    email
-                )
-            )
-
-        logger.info(
-            "👨‍🏫 Registros docentes adicionados: %d",
-            len(resultados)
-        )
-
-        # =====================================================================
-        # 2. DISCIPLINA/CURSO DOS DOCENTES
-        # =====================================================================
-
-        combinacoes_disciplina_curso = set()
-
-        for disciplina, curso, _ in (
-            dados_docentes
-        ):
-
-            if not disciplina:
-                continue
-
-            curso_unificado, _ = (
-                self._normalizar_curso(
-                    curso
-                )
-            )
-
-            combinacoes_disciplina_curso.add(
-                (
-                    str(
-                        disciplina
-                    ).strip(),
-
-                    curso_unificado
-                )
-            )
-
-        logger.info(
-            "📚 Combinações disciplina/curso dos docentes: %d",
-            len(combinacoes_disciplina_curso)
-        )
-
-        # =====================================================================
-        # 3. NDE POR CURSO
-        # =====================================================================
-
-        nde_por_curso = (
-            self._obter_emails_nde_por_curso()
-        )
-
-        # =====================================================================
-        # 4. NDE NAS DISCIPLINAS NORMAIS
-        # =====================================================================
-
-        nde_registros = 0
-
-        for disciplina, curso_unificado in (
-            combinacoes_disciplina_curso
-        ):
-
-            if curso_unificado == CURSO_COMPARTILHADO:
-                continue
-
-            usuarios = nde_por_curso.get(
-                curso_unificado,
-                set()
-            )
-
-            for email in usuarios:
-
-                resultados.add(
-                    (
-                        disciplina,
-                        curso_unificado,
-                        email
+                    OR c.faculdade IN (
+                        {self.faculdades_placeholders}
                     )
-                )
+              )
 
-                nde_registros += 1
+              AND (
+                    t.disciplina LIKE '%{SUFIXO_COMPARTILHADA}'
 
-        logger.info(
-            "👥 Vínculos NDE em disciplinas próprias: %d",
-            nde_registros
-        )
+                    OR t.curso IS NULL
 
-        # =====================================================================
-        # 5. DISCIPLINAS COMPARTILHADAS
-        # =====================================================================
+                    OR LTRIM(RTRIM(
+                        CAST(t.curso AS NVARCHAR(100))
+                    )) = ''
 
-        disciplinas_compartilhadas = (
-            self._obter_disciplinas_compartilhadas()
-        )
-
-        # =====================================================================
-        # 6. NDE -> DISCIPLINAS COMPARTILHADAS
-        # =====================================================================
-
-        acessos_nde_compartilhados = (
-            self._gerar_acessos_nde_compartilhados(
-                disciplinas_compartilhadas,
-                nde_por_curso
-            )
-        )
-
-        # =====================================================================
-        # 7. ADICIONA VÍNCULOS COMPARTILHADOS
-        # =====================================================================
-
-        for disciplina_com, curso, email in (
-            acessos_nde_compartilhados
-        ):
-
-            resultados.add(
-                (
-                    disciplina_com,
-                    curso,
-                    email
-                )
-            )
-
-        logger.info(
-            "🌐 Vínculos compartilhados adicionados: %d",
-            len(acessos_nde_compartilhados)
-        )
-
-        # =====================================================================
-        # RESULTADO FINAL
-        # =====================================================================
-
-        logger.info(
-            "📊 Resultado bruto final: %d",
-            len(resultados)
-        )
-
-        return list(
-            resultados
-        )
-
-    # =========================================================================
-    # TRANSFORMAÇÃO
-    # =========================================================================
-
-    def transformar_dados(
-        self,
-        dados_lyceum
-    ):
-        """
-        Converte os dados para o formato da tabela destino.
-
-        REGRA FUNDAMENTAL:
-
-        O curso somente será convertido para 999 quando o curso
-        ORIGINAL da turma for:
-
-            NULL
-            vazio
-            999
-
-        Uma disciplina com curso real permanece no curso real
-        após o MAPEAMENTO_CURSOS.
+                    OR LTRIM(RTRIM(
+                        CAST(t.curso AS NVARCHAR(100))
+                    )) = '999'
+              )
         """
 
-        dados = []
+        params = [
+            ANO_VIGENTE,
+            *PERIODOS_VIGENTES,
+            SITUACAO_TURMA_VALIDA,
+            *FACULDADES_INCLUIDAS,
+        ]
 
-        for disciplina, curso, email in (
-            dados_lyceum
-        ):
+        try:
 
-            if not disciplina:
-                continue
+            with get_db_connection(
+                database_name="lyceum"
+            ) as conn:
 
-            if not validar_email(
-                email
-            ):
+                rows = conn.execute(
+                    query,
+                    tuple(params)
+                ).fetchall()
+
+        except Exception:
+
+            logger.exception(
+                "Erro ao consultar disciplinas compartilhadas."
+            )
+
+            return {}
+
+        resultado = {}
+
+        for disciplina, curso in rows:
+
+            if disciplina is None:
                 continue
 
             disciplina = str(
                 disciplina
             ).strip()
 
-            # =================================================================
-            # PRESERVA O CURSO ORIGINAL
-            # =================================================================
+            if not disciplina:
+                continue
 
-            curso_original = curso
+            if not disciplina.endswith(
+                SUFIXO_COMPARTILHADA
+            ):
 
-            curso_original_str = (
-                str(
-                    curso_original
-                ).strip()
-                if curso_original is not None
-                else ""
+                continue
+
+            curso_unificado, _ = (
+                self._normalizar_curso(curso)
             )
 
-            # =================================================================
-            # DEFINE SE A TURMA É REALMENTE COMPARTILHADA
-            # =================================================================
-
-            curso_eh_compartilhado = (
-                curso_original is None
-                or curso_original_str == ""
-                or curso_original_str == CURSO_COMPARTILHADO
+            resultado.setdefault(
+                disciplina,
+                set()
+            ).add(
+                curso_unificado
             )
 
-            # =================================================================
-            # NORMALIZA CURSO
-            # =================================================================
+        return resultado
 
-            curso_unificado, nome_curso_unificado = (
-                self._normalizar_curso(
-                    curso_original
+    # ========================================================================
+    # NDE
+    # ========================================================================
+
+    def _obter_nde_por_curso(self):
+
+        query = """
+            SELECT DISTINCT
+
+                codigoCurso,
+
+                emailMembro
+
+            FROM imp_nde_membros
+
+            WHERE codigoCurso IS NOT NULL
+
+              AND emailMembro IS NOT NULL
+
+              AND LTRIM(RTRIM(emailMembro)) <> ''
+
+              AND status = 'S'
+        """
+
+        try:
+
+            with get_db_connection(
+                database_name="qstione"
+            ) as conn:
+
+                rows = conn.execute(
+                    query
+                ).fetchall()
+
+        except Exception:
+
+            logger.exception(
+                "Erro ao consultar usuários NDE."
+            )
+
+            return {}
+
+        resultado = {}
+
+        for curso, email in rows:
+
+            if email is None:
+                continue
+
+            email = converter_minusculas(
+                str(email).strip()
+            )
+
+            if not validar_email(email):
+                continue
+
+            curso_unificado, _ = (
+                self._normalizar_curso(curso)
+            )
+
+            resultado.setdefault(
+                curso_unificado,
+                set()
+            ).add(
+                email
+            )
+
+        return resultado
+
+    # ========================================================================
+    # TRANSFORMAÇÃO
+    # ========================================================================
+
+    def transformar_dados(
+        self,
+        dados_lyceum
+    ):
+        """
+        Transforma docentes em vínculos disciplina/usuário.
+        """
+
+        dados = []
+
+        # --------------------------------------------------------------------
+        # DOCENTES
+        # --------------------------------------------------------------------
+
+        for disciplina, curso, email in dados_lyceum:
+
+            if disciplina is None:
+                continue
+
+            disciplina = str(
+                disciplina
+            ).strip()
+
+            if not disciplina:
+                continue
+
+            if email is None:
+                continue
+
+            email = converter_minusculas(
+                str(email).strip()
+            )
+
+            if not validar_email(email):
+                continue
+
+            curso_unificado, nome_curso = (
+                self._normalizar_curso(curso)
+            )
+
+            # ---------------------------------------------------------------
+            # DISCIPLINA COMPARTILHADA
+            # ---------------------------------------------------------------
+
+            if disciplina.endswith(
+                SUFIXO_COMPARTILHADA
+            ):
+
+                disciplina_base = (
+                    disciplina[
+                        : -len(SUFIXO_COMPARTILHADA)
+                    ]
                 )
-            )
-
-            # =================================================================
-            # DISCIPLINA COM SUFIXO -COM
-            # =================================================================
-
-            possui_sufixo_com = (
-                disciplina.endswith(
-                    SUFIXO_COMPARTILHADA
-                )
-            )
-
-            # =================================================================
-            # SOMENTE É COMPARTILHADA QUANDO:
-            #
-            #   1. possui -COM
-            #   2. curso original é NULL/vazio/999
-            #
-            # =================================================================
-
-            eh_compartilhada = (
-                possui_sufixo_com
-                and curso_eh_compartilhado
-            )
-
-            if eh_compartilhada:
-
-                disciplina_base = disciplina[
-                    :-len(
-                        SUFIXO_COMPARTILHADA
-                    )
-                ].strip()
 
                 curso_unificado = (
                     CURSO_COMPARTILHADO
                 )
 
-                nome_curso_unificado = (
+                nome_curso = (
                     "COMPARTILHADA"
                 )
 
             else:
 
-                # -------------------------------------------------------------
-                # DISCIPLINA NORMAL
-                #
-                # Mesmo que termine em -COM, se a turma possuir um
-                # curso real ela permanece nesse curso.
-                # -------------------------------------------------------------
-
                 disciplina_base = disciplina
-
-            # =================================================================
-            # VALIDAÇÃO
-            # =================================================================
 
             if not disciplina_base:
                 continue
 
-            # =================================================================
-            # GERA CÓDIGO DA DISCIPLINA
-            # =================================================================
-
             codigo_disciplina = (
                 gerar_codigo_disciplina_curso(
                     disciplina_base,
-                    nome_curso_unificado,
-                    curso_unificado
+                    nome_curso,
+                    curso_unificado,
                 )
             )
 
@@ -1501,70 +780,148 @@ class ImportadorUsuariosDisciplinas:
                 30
             )
 
-            # =================================================================
-            # E-MAIL
-            # =================================================================
-
-            email_final = converter_minusculas(
-                str(
-                    email
-                ).strip()
-            )
-
-            email_final = truncar_texto(
-                email_final,
-                100
-            )
-
             dados.append(
                 {
-                    "codigoDisciplina": codigo_disciplina,
-                    "emailUsuario": email_final,
+                    "codigoDisciplina":
+                        codigo_disciplina,
+
+                    "emailUsuario":
+                        truncar_texto(
+                            email,
+                            100
+                        ),
                 }
             )
 
-        # =====================================================================
+        # --------------------------------------------------------------------
         # DEDUPLICAÇÃO
-        # =====================================================================
+        # --------------------------------------------------------------------
 
         unicos = {}
 
         for registro in dados:
 
             chave = (
-                registro[
-                    "codigoDisciplina"
-                ],
-
-                registro[
-                    "emailUsuario"
-                ],
+                registro["codigoDisciplina"],
+                registro["emailUsuario"],
             )
 
             unicos[chave] = registro
 
-        dados_finais = list(
+        resultado = list(
             unicos.values()
         )
 
         logger.info(
-            "🔄 Registros após transformação/deduplicação: %d",
-            len(dados_finais)
+            "🔄 Docentes após deduplicação: %d",
+            len(resultado)
         )
 
-        return dados_finais
+        # --------------------------------------------------------------------
+        # NDE NAS DISCIPLINAS COMPARTILHADAS
+        # --------------------------------------------------------------------
 
-    # =========================================================================
+        disciplinas_compartilhadas = (
+            self._obter_disciplinas_compartilhadas()
+        )
+
+        nde_por_curso = (
+            self._obter_nde_por_curso()
+        )
+
+        for disciplina_com, cursos in (
+            disciplinas_compartilhadas.items()
+        ):
+
+            disciplina_base = (
+                disciplina_com[
+                    : -len(SUFIXO_COMPARTILHADA)
+                ]
+            )
+
+            for curso in cursos:
+
+                usuarios = (
+                    nde_por_curso.get(
+                        curso,
+                        set()
+                    )
+                )
+
+                if not usuarios:
+                    continue
+
+                codigo_disciplina = (
+                    gerar_codigo_disciplina_curso(
+                        disciplina_base,
+                        "COMPARTILHADA",
+                        CURSO_COMPARTILHADO,
+                    )
+                )
+
+                codigo_disciplina = (
+                    truncar_texto(
+                        codigo_disciplina,
+                        30
+                    )
+                )
+
+                for email in usuarios:
+
+                    resultado.append(
+                        {
+                            "codigoDisciplina":
+                                codigo_disciplina,
+
+                            "emailUsuario":
+                                truncar_texto(
+                                    email,
+                                    100
+                                ),
+                        }
+                    )
+
+        # --------------------------------------------------------------------
+        # DEDUPLICAÇÃO FINAL
+        # --------------------------------------------------------------------
+
+        unicos = {}
+
+        for registro in resultado:
+
+            chave = (
+                registro["codigoDisciplina"],
+                registro["emailUsuario"],
+            )
+
+            unicos[chave] = registro
+
+        resultado_final = list(
+            unicos.values()
+        )
+
+        resultado_final.sort(
+            key=lambda x: (
+                x["codigoDisciplina"],
+                x["emailUsuario"],
+            )
+        )
+
+        logger.info(
+            "✅ Registros finais: %d",
+            len(resultado_final)
+        )
+
+        return resultado_final
+
+    # ========================================================================
     # IMPORTAÇÃO
-    # =========================================================================
+    # ========================================================================
 
     def importar_para_qstione(
         self,
         dados_transformados
     ):
-        """
-        Reconstrói a tabela imp_008_usuarios_disciplinas.
-        """
 
         self._criar_tabela()
 
@@ -1578,12 +935,13 @@ class ImportadorUsuariosDisciplinas:
             ) as conn:
 
                 logger.info(
-                    "🧹 Limpando imp_008_usuarios_disciplinas..."
+                    "🧹 Limpando tabela..."
                 )
 
                 conn.execute(
                     """
-                    DELETE FROM imp_008_usuarios_disciplinas
+                    DELETE
+                    FROM imp_008_usuarios_disciplinas
                     """
                 )
 
@@ -1597,7 +955,8 @@ class ImportadorUsuariosDisciplinas:
 
                         cursor.execute(
                             """
-                            INSERT INTO imp_008_usuarios_disciplinas
+                            INSERT INTO
+                                imp_008_usuarios_disciplinas
                             (
                                 codigoDisciplina,
                                 emailUsuario,
@@ -1627,23 +986,19 @@ class ImportadorUsuariosDisciplinas:
 
                         inseridos += 1
 
-                    except Exception as e:
+                    except Exception as exc:
 
                         erros += 1
 
                         logger.error(
-                            "❌ Erro ao inserir "
-                            "%s - %s: %s",
-
+                            "Erro ao inserir %s - %s: %s",
                             registro[
                                 "codigoDisciplina"
                             ],
-
                             registro[
                                 "emailUsuario"
                             ],
-
-                            e
+                            exc
                         )
 
                 conn.commit()
@@ -1651,7 +1006,7 @@ class ImportadorUsuariosDisciplinas:
         except Exception:
 
             logger.exception(
-                "❌ Erro durante reconstrução da tabela."
+                "Erro durante reconstrução da tabela."
             )
 
             return {
@@ -1674,16 +1029,11 @@ class ImportadorUsuariosDisciplinas:
             ),
         }
 
-    # =========================================================================
+    # ========================================================================
     # EXECUÇÃO
-    # =========================================================================
+    # ========================================================================
 
     def executar_importacao(self):
-        """
-        Executa todo o processo de importação.
-
-        Pode ser executado diretamente pelo botão Play do VS Code.
-        """
 
         print("=" * 80)
 
@@ -1712,22 +1062,14 @@ class ImportadorUsuariosDisciplinas:
 
         print("=" * 80)
 
-        # =====================================================================
-        # CONSULTA
-        # =====================================================================
-
         dados = (
-            self.obter_dados_lyceum()
+            self._obter_docentes_turmas()
         )
 
         print(
             f"📊 Registros brutos: "
             f"{len(dados)}"
         )
-
-        # =====================================================================
-        # TRANSFORMAÇÃO
-        # =====================================================================
 
         transformados = (
             self.transformar_dados(
@@ -1739,10 +1081,6 @@ class ImportadorUsuariosDisciplinas:
             f"✅ Registros únicos: "
             f"{len(transformados)}"
         )
-
-        # =====================================================================
-        # IMPORTAÇÃO
-        # =====================================================================
 
         resultado = (
             self.importar_para_qstione(
@@ -1762,40 +1100,13 @@ class ImportadorUsuariosDisciplinas:
 
         print("=" * 80)
 
-        logger.info(
-            "RESULTADO FINAL | "
-            "Processados=%d | "
-            "Inseridos=%d | "
-            "Erros=%d",
-
-            resultado[
-                "total_processados"
-            ],
-
-            resultado[
-                "total_inseridos"
-            ],
-
-            resultado[
-                "total_erros"
-            ]
-        )
-
-        logger.info(
-            "FIM imp_008_usuarios_disciplinas"
-        )
-
         return transformados
 
 
-# =============================================================================
+# ============================================================================
 # EXECUÇÃO DIRETA
-# =============================================================================
+# ============================================================================
 
 if __name__ == "__main__":
 
-    importador = (
-        ImportadorUsuariosDisciplinas()
-    )
-
-    importador.executar_importacao()
+    ImportadorUsuariosDisciplinas().executar_importacao()
