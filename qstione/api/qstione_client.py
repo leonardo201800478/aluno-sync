@@ -78,9 +78,7 @@ class QstioneAPIClient:
         self.headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "Authorization": (
-                f"Bearer {QSTIONE_TOKEN}"
-            ),
+            "tokenIdInstituicao": QSTIONE_TOKEN,
         }
 
     def post(
